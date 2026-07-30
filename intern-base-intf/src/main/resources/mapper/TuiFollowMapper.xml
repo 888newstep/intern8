@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="vip.xiaozhao.intern.baseUtil.intf.mapper.TuiFollowMapper">
+
+    <resultMap id="followResultMap" type="vip.xiaozhao.intern.baseUtil.intf.entity.TuiFollow">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="followUserId" column="follow_user_id"/>
+        <result property="createTime" column="create_time"/>
+        <result property="status" column="status"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="vip.xiaozhao.intern.baseUtil.intf.entity.TuiFollow" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO tui_follow (user_id, follow_user_id, create_time, status)
+        VALUES (#{userId}, #{followUserId}, #{createTime}, #{status})
+    </insert>
+
+    <update id="deleteByUserAndFollow">
+        UPDATE tui_follow SET status = 1 WHERE user_id = #{userId} AND follow_user_id = #{followUserId} AND status = 0
+    </update>
+
+    <select id="selectByUserAndFollow" resultMap="followResultMap">
+        SELECT id, user_id, follow_user_id, create_time, status
+        FROM tui_follow
+        WHERE user_id = #{userId} AND follow_user_id = #{followUserId} AND status = 0
+    </select>
+
+    <select id="selectFollowUserIds" resultType="java.lang.Long">
+        SELECT follow_user_id FROM tui_follow WHERE user_id = #{userId} AND status = 0
+    </select>
+
+    <select id="countFollowers" resultType="java.lang.Integer">
+        SELECT COUNT(*) FROM tui_follow WHERE follow_user_id = #{userId} AND status = 0
+    </select>
+
+    <select id="countFollowing" resultType="java.lang.Integer">
+        SELECT COUNT(*) FROM tui_follow WHERE user_id = #{userId} AND status = 0
+    </select>
+
+</mapper>

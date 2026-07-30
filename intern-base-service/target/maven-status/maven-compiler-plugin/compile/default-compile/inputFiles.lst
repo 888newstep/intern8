@@ -1,0 +1,10 @@
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\config\RabbitMQConfig.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\ArchiveFallbackTask.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\CommentServiceImpl.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\DistributedLockService.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\DynamicServiceImpl.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\NotificationServiceImpl.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\RabbitMQHandler.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\RabbitMQSender.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\RateLimiterService.java
+C:\Users\xiaohongfu\IdeaProjects\xiaozhaovip-intern8\intern-base-service\src\main\java\vip\xiaozhao\intern\baseUtil\service\RedisCacheService.java

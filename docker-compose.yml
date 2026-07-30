@@ -1,0 +1,237 @@
+version: '3.8'
+
+services:
+  # ==================== MySQL ====================
+  mysql:
+    image: mysql:8.0
+    container_name: intern-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: xiao
+      MYSQL_USER: naof
+      MYSQL_PASSWORD: Ijia
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./intern-base-intf/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    networks:
+      - intern-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Redis Sentinel ====================
+  redis-master:
+    image: redis:7.2
+    container_name: intern-redis-master
+    command: redis-server --appendonly yes --requirepass xiaozhaovip
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-master-data:/data
+    networks:
+      - intern-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "xiaozhaovip", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-slave-1:
+    image: redis:7.2
+    container_name: intern-redis-slave-1
+    command: redis-server --appendonly yes --slaveof redis-master 6379 --requirepass xiaozhaovip --masterauth xiaozhaovip
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-slave-1-data:/data
+    networks:
+      - intern-net
+    depends_on:
+      - redis-master
+
+  redis-slave-2:
+    image: redis:7.2
+    container_name: intern-redis-slave-2
+    command: redis-server --appendonly yes --slaveof redis-master 6379 --requirepass xiaozhaovip --masterauth xiaozhaovip
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-slave-2-data:/data
+    networks:
+      - intern-net
+    depends_on:
+      - redis-master
+
+  redis-sentinel-1:
+    image: redis:7.2
+    container_name: intern-redis-sentinel-1
+    command: >
+      redis-sentinel /etc/redis/sentinel.conf
+    ports:
+      - "26379:26379"
+    volumes:
+      - ./deploy/redis/sentinel1.conf:/etc/redis/sentinel.conf
+    networks:
+      - intern-net
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+
+  redis-sentinel-2:
+    image: redis:7.2
+    container_name: intern-redis-sentinel-2
+    command: >
+      redis-sentinel /etc/redis/sentinel.conf
+    ports:
+      - "26380:26379"
+    volumes:
+      - ./deploy/redis/sentinel2.conf:/etc/redis/sentinel.conf
+    networks:
+      - intern-net
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+
+  redis-sentinel-3:
+    image: redis:7.2
+    container_name: intern-redis-sentinel-3
+    command: >
+      redis-sentinel /etc/redis/sentinel.conf
+    ports:
+      - "26381:26379"
+    volumes:
+      - ./deploy/redis/sentinel3.conf:/etc/redis/sentinel.conf
+    networks:
+      - intern-net
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+
+  # ==================== RabbitMQ Cluster ====================
+  rabbitmq-1:
+    image: rabbitmq:3.13-management
+    container_name: intern-rabbitmq-1
+    hostname: rabbitmq-1
+    environment:
+      RABBITMQ_ERLANG_COOKIE: INTERN_RABBITMQ_COOKIE_2024
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-1-data:/var/lib/rabbitmq
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+    networks:
+      - intern-net
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq-2:
+    image: rabbitmq:3.13-management
+    container_name: intern-rabbitmq-2
+    hostname: rabbitmq-2
+    environment:
+      RABBITMQ_ERLANG_COOKIE: INTERN_RABBITMQ_COOKIE_2024
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    volumes:
+      - rabbitmq-2-data:/var/lib/rabbitmq
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+    networks:
+      - intern-net
+    depends_on:
+      - rabbitmq-1
+
+  rabbitmq-3:
+    image: rabbitmq:3.13-management
+    container_name: intern-rabbitmq-3
+    hostname: rabbitmq-3
+    environment:
+      RABBITMQ_ERLANG_COOKIE: INTERN_RABBITMQ_COOKIE_2024
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    ports:
+      - "5674:5672"
+      - "15674:15672"
+    volumes:
+      - rabbitmq-3-data:/var/lib/rabbitmq
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+    networks:
+      - intern-net
+    depends_on:
+      - rabbitmq-1
+
+  # ==================== Monitoring ====================
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: intern-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - intern-net
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: intern-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+    volumes:
+      - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    networks:
+      - intern-net
+    depends_on:
+      - prometheus
+
+  # ==================== Application ====================
+  app:
+    build: .
+    container_name: intern-app
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      JWT_SECRET: NaofferBaseIntern8SecretKeyForJwt2024HmacSha256
+      REDIS_AUTH: xiaozhaovip
+      RABBIT_USER: admin
+      RABBIT_PASS: admin123
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq-1:
+        condition: service_healthy
+    networks:
+      - intern-net
+
+networks:
+  intern-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-master-data:
+  redis-slave-1-data:
+  redis-slave-2-data:
+  rabbitmq-1-data:
+  rabbitmq-2-data:
+  rabbitmq-3-data:
