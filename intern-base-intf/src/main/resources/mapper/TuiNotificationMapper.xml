@@ -24,10 +24,10 @@
         WHERE id = #{id}
     </select>
 
-    <select id="selectByUserId" resultMap="notificationResultMap">
+    <select id="selectByUserId" resultMap="notificationResultMap" timeout="5">
         SELECT id, user_id, sender_id, type, content, target_id, is_read, create_time
         FROM tui_notification
-        WHERE user_id = #{userId} AND id < #{cursor}
+        WHERE user_id = #{userId} AND id &lt; #{cursor}
         ORDER BY id DESC
         LIMIT #{limit}
     </select>
@@ -44,7 +44,7 @@
         DELETE FROM tui_notification WHERE id = #{id}
     </delete>
 
-    <select id="countUnread" resultType="java.lang.Integer">
+    <select id="countUnread" resultType="java.lang.Integer" timeout="3">
         SELECT COUNT(*) FROM tui_notification WHERE user_id = #{userId} AND is_read = 0
     </select>
 

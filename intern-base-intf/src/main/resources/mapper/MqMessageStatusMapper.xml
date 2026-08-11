@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="vip.xiaozhao.intern.baseUtil.intf.mapper.MqMessageStatusMapper">
+
+    <resultMap id="BaseResultMap" type="vip.xiaozhao.intern.baseUtil.intf.entity.MqMessageStatus">
+        <id column="id" property="id"/>
+        <result column="message_id" property="messageId"/>
+        <result column="event_type" property="eventType"/>
+        <result column="business_key" property="businessKey"/>
+        <result column="message_body" property="messageBody"/>
+        <result column="status" property="status"/>
+        <result column="retry_count" property="retryCount"/>
+        <result column="last_error" property="lastError"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="vip.xiaozhao.intern.baseUtil.intf.entity.MqMessageStatus">
+        INSERT INTO mq_message_status (message_id, event_type, business_key, message_body, status, retry_count, last_error, create_time, update_time)
+        VALUES (#{messageId}, #{eventType}, #{businessKey}, #{messageBody}, #{status}, #{retryCount}, #{lastError}, #{createTime}, #{updateTime})
+    </insert>
+
+    <update id="transitionStatus">
+        UPDATE mq_message_status
+        SET status = #{toStatus}, last_error = #{lastError}, update_time = NOW()
+        WHERE message_id = #{messageId}
+          AND status IN
+          <foreach collection="fromStatuses" item="fromStatus" open="(" separator="," close=")">
+              #{fromStatus}
+          </foreach>
+    </update>
+
+    <update id="claimForCompensation">
+        UPDATE mq_message_status
+        SET status = 5, update_time = NOW()
+        WHERE message_id = #{messageId}
+          AND retry_count &lt; #{maxRetryCount}
+          AND (
+              status IN (2, 4)
+              OR (status = 5 AND TIMESTAMPDIFF(SECOND, update_time, NOW()) &gt;= #{staleSeconds})
+          )
+    </update>
+
+    <select id="selectCompensableMessages" resultMap="BaseResultMap">
+        SELECT *
+        FROM mq_message_status
+        WHERE retry_count &lt; #{maxRetryCount}
+          AND message_body IS NOT NULL
+          AND (
+              status IN (2, 4)
+              OR (status = 5 AND TIMESTAMPDIFF(SECOND, update_time, NOW()) &gt;= #{staleSeconds})
+          )
+        ORDER BY update_time ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="incrementRetryCount">
+        UPDATE mq_message_status
+        SET retry_count = retry_count + 1, last_error = COALESCE(#{lastError}, last_error), update_time = NOW()
+        WHERE message_id = #{messageId}
+    </update>
+
+    <select id="selectByMessageId" resultMap="BaseResultMap">
+        SELECT * FROM mq_message_status WHERE message_id = #{messageId}
+    </select>
+
+</mapper>

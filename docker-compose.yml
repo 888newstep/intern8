@@ -1,4 +1,4 @@
-version: '3.8'
+﻿version: '3.8'
 
 services:
   # ==================== MySQL ====================
@@ -6,10 +6,10 @@ services:
     image: mysql:8.0
     container_name: intern-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root123
-      MYSQL_DATABASE: xiao
-      MYSQL_USER: naof
-      MYSQL_PASSWORD: Ijia
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-xiao}
+      MYSQL_USER: "${MYSQL_USERNAME:?MYSQL_USERNAME must be set}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set}"
     ports:
       - "3306:3306"
     volumes:
@@ -28,7 +28,12 @@ services:
   redis-master:
     image: redis:7.2
     container_name: intern-redis-master
-    command: redis-server --appendonly yes --requirepass xiaozhaovip
+    environment:
+      REDIS_AUTH: "${REDIS_AUTH:?REDIS_AUTH must be set}"
+    command:
+      - sh
+      - -c
+      - 'exec redis-server --appendonly yes --requirepass "$${REDIS_AUTH}"'
     ports:
       - "6379:6379"
     volumes:
@@ -36,7 +41,7 @@ services:
     networks:
       - intern-net
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "xiaozhaovip", "ping"]
+      test: ["CMD-SHELL", 'redis-cli -a "$${REDIS_AUTH}" ping | grep -q PONG']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -44,7 +49,12 @@ services:
   redis-slave-1:
     image: redis:7.2
     container_name: intern-redis-slave-1
-    command: redis-server --appendonly yes --slaveof redis-master 6379 --requirepass xiaozhaovip --masterauth xiaozhaovip
+    environment:
+      REDIS_AUTH: "${REDIS_AUTH:?REDIS_AUTH must be set}"
+    command:
+      - sh
+      - -c
+      - 'exec redis-server --appendonly yes --slaveof redis-master 6379 --requirepass "$${REDIS_AUTH}" --masterauth "$${REDIS_AUTH}"'
     ports:
       - "6380:6379"
     volumes:
@@ -57,7 +67,12 @@ services:
   redis-slave-2:
     image: redis:7.2
     container_name: intern-redis-slave-2
-    command: redis-server --appendonly yes --slaveof redis-master 6379 --requirepass xiaozhaovip --masterauth xiaozhaovip
+    environment:
+      REDIS_AUTH: "${REDIS_AUTH:?REDIS_AUTH must be set}"
+    command:
+      - sh
+      - -c
+      - 'exec redis-server --appendonly yes --slaveof redis-master 6379 --requirepass "$${REDIS_AUTH}" --masterauth "$${REDIS_AUTH}"'
     ports:
       - "6381:6379"
     volumes:
@@ -70,12 +85,15 @@ services:
   redis-sentinel-1:
     image: redis:7.2
     container_name: intern-redis-sentinel-1
-    command: >
-      redis-sentinel /etc/redis/sentinel.conf
+    entrypoint: ["sh", "/usr/local/bin/sentinel-entrypoint.sh"]
+    environment:
+      REDIS_AUTH: "${REDIS_AUTH:?REDIS_AUTH must be set}"
+      REDIS_SENTINEL_MONITOR_HOST: redis-master
+      REDIS_SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
     ports:
       - "26379:26379"
     volumes:
-      - ./deploy/redis/sentinel1.conf:/etc/redis/sentinel.conf
+      - ./deploy/redis/sentinel-entrypoint.sh:/usr/local/bin/sentinel-entrypoint.sh:ro
     networks:
       - intern-net
     depends_on:
@@ -86,12 +104,15 @@ services:
   redis-sentinel-2:
     image: redis:7.2
     container_name: intern-redis-sentinel-2
-    command: >
-      redis-sentinel /etc/redis/sentinel.conf
+    entrypoint: ["sh", "/usr/local/bin/sentinel-entrypoint.sh"]
+    environment:
+      REDIS_AUTH: "${REDIS_AUTH:?REDIS_AUTH must be set}"
+      REDIS_SENTINEL_MONITOR_HOST: redis-master
+      REDIS_SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
     ports:
       - "26380:26379"
     volumes:
-      - ./deploy/redis/sentinel2.conf:/etc/redis/sentinel.conf
+      - ./deploy/redis/sentinel-entrypoint.sh:/usr/local/bin/sentinel-entrypoint.sh:ro
     networks:
       - intern-net
     depends_on:
@@ -102,12 +123,15 @@ services:
   redis-sentinel-3:
     image: redis:7.2
     container_name: intern-redis-sentinel-3
-    command: >
-      redis-sentinel /etc/redis/sentinel.conf
+    entrypoint: ["sh", "/usr/local/bin/sentinel-entrypoint.sh"]
+    environment:
+      REDIS_AUTH: "${REDIS_AUTH:?REDIS_AUTH must be set}"
+      REDIS_SENTINEL_MONITOR_HOST: redis-master
+      REDIS_SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
     ports:
       - "26381:26379"
     volumes:
-      - ./deploy/redis/sentinel3.conf:/etc/redis/sentinel.conf
+      - ./deploy/redis/sentinel-entrypoint.sh:/usr/local/bin/sentinel-entrypoint.sh:ro
     networks:
       - intern-net
     depends_on:
@@ -121,9 +145,9 @@ services:
     container_name: intern-rabbitmq-1
     hostname: rabbitmq-1
     environment:
-      RABBITMQ_ERLANG_COOKIE: INTERN_RABBITMQ_COOKIE_2024
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE:?RABBITMQ_ERLANG_COOKIE must be set}"
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -143,9 +167,9 @@ services:
     container_name: intern-rabbitmq-2
     hostname: rabbitmq-2
     environment:
-      RABBITMQ_ERLANG_COOKIE: INTERN_RABBITMQ_COOKIE_2024
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE:?RABBITMQ_ERLANG_COOKIE must be set}"
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
     ports:
       - "5673:5672"
       - "15673:15672"
@@ -162,9 +186,9 @@ services:
     container_name: intern-rabbitmq-3
     hostname: rabbitmq-3
     environment:
-      RABBITMQ_ERLANG_COOKIE: INTERN_RABBITMQ_COOKIE_2024
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE:?RABBITMQ_ERLANG_COOKIE must be set}"
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
     ports:
       - "5674:5672"
       - "15674:15672"
@@ -193,8 +217,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}"
     volumes:
       - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources
       - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards
@@ -211,13 +235,26 @@ services:
       - "8080:8080"
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      JWT_SECRET: NaofferBaseIntern8SecretKeyForJwt2024HmacSha256
-      REDIS_AUTH: xiaozhaovip
-      RABBIT_USER: admin
-      RABBIT_PASS: admin123
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-xiao}
+      MYSQL_USERNAME: "${MYSQL_USERNAME:?MYSQL_USERNAME must be set}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set}"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set}"
+      REDIS_MODE: sentinel
+      REDIS_AUTH: "${REDIS_AUTH:?REDIS_AUTH must be set}"
+      REDIS_SENTINEL_MASTER: ${REDIS_SENTINEL_MASTER:-mymaster}
+      REDIS_SENTINEL_NODES: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+      RABBITMQ_HOST: rabbitmq-1
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
+      RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
     depends_on:
       mysql:
         condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       rabbitmq-1:
         condition: service_healthy
     networks:

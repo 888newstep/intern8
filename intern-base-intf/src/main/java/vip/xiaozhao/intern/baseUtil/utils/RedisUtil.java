@@ -3,9 +3,6 @@ package vip.xiaozhao.intern.baseUtil.utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.exceptions.JedisException;
 
 import java.util.Set;
 
@@ -14,125 +11,156 @@ public class RedisUtil {
 
     private static final Logger logger = LoggerFactory.getLogger(RedisUtil.class);
 
-    private final JedisPool jedisPool;
+    private final RedisCommandClient redisCommandClient;
 
-    public RedisUtil(JedisPool jedisPool) {
-        this.jedisPool = jedisPool;
+    public RedisUtil(RedisCommandClient redisCommandClient) {
+        this.redisCommandClient = redisCommandClient;
     }
 
-    // 设置值
     public void set(String key, String value) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            jedis.set(key, value);
-        } catch (JedisException e) {
+        try {
+            redisCommandClient.set(key, value);
+        } catch (Exception e) {
             logger.error("Redis set error, key: {}", key, e);
         }
     }
 
-    // 设置值并指定过期时间
     public void set(String key, String value, int expireTime) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            jedis.setex(key, expireTime, value);
-        } catch (JedisException e) {
+        try {
+            redisCommandClient.set(key, value, expireTime);
+        } catch (Exception e) {
             logger.error("Redis setex error, key: {}", key, e);
         }
     }
 
-    // 获取值
+    /**
+     * 严格写入接口交给上层熔断策略处理，不在这里吞掉连接异常。
+     */
+    public void setStrict(String key, String value, int expireTime) {
+        redisCommandClient.set(key, value, expireTime);
+    }
+
     public String get(String key) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            return jedis.get(key);
-        } catch (JedisException e) {
+        try {
+            return redisCommandClient.get(key);
+        } catch (Exception e) {
             logger.error("Redis get error, key: {}", key, e);
             return null;
         }
     }
 
-    // 删除值
+    /**
+     * 严格读取接口供缓存服务记录 Redis 下游失败。
+     */
+    public String getStrict(String key) {
+        return redisCommandClient.get(key);
+    }
+
     public void delete(String key) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            jedis.del(key);
-        } catch (JedisException e) {
+        try {
+            redisCommandClient.delete(key);
+        } catch (Exception e) {
             logger.error("Redis del error, key: {}", key, e);
         }
     }
 
-    // 增加计数
+    /**
+     * Execute delete without swallowing the downstream exception.
+     * Callers that own a circuit breaker must be able to record Redis failures.
+     */
+    public void deleteStrict(String key) {
+        redisCommandClient.delete(key);
+    }
+
     public Long incr(String key) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            return jedis.incr(key);
-        } catch (JedisException e) {
+        try {
+            return redisCommandClient.incr(key);
+        } catch (Exception e) {
             logger.error("Redis incr error, key: {}", key, e);
             return null;
         }
     }
 
-    // 减少计数
     public Long decr(String key) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            return jedis.decr(key);
-        } catch (JedisException e) {
+        try {
+            return redisCommandClient.decr(key);
+        } catch (Exception e) {
             logger.error("Redis decr error, key: {}", key, e);
             return null;
         }
     }
 
-    // 获取计数
     public Long getCount(String key) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            String value = jedis.get(key);
+        try {
+            String value = redisCommandClient.get(key);
             return value == null ? 0 : Long.parseLong(value);
-        } catch (JedisException e) {
+        } catch (Exception e) {
             logger.error("Redis getCount error, key: {}", key, e);
             return 0L;
         }
     }
 
-    // 设置哈希值
     public void hset(String key, String field, String value) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            jedis.hset(key, field, value);
-        } catch (JedisException e) {
+        try {
+            redisCommandClient.hset(key, field, value);
+        } catch (Exception e) {
             logger.error("Redis hset error, key: {}, field: {}", key, field, e);
         }
     }
 
-    // 获取哈希值
     public String hget(String key, String field) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            return jedis.hget(key, field);
-        } catch (JedisException e) {
+        try {
+            return redisCommandClient.hget(key, field);
+        } catch (Exception e) {
             logger.error("Redis hget error, key: {}, field: {}", key, field, e);
             return null;
         }
     }
 
-    // 获取所有哈希字段
     public Set<String> hkeys(String key) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            return jedis.hkeys(key);
-        } catch (JedisException e) {
+        try {
+            return redisCommandClient.hkeys(key);
+        } catch (Exception e) {
             logger.error("Redis hkeys error, key: {}", key, e);
             return null;
         }
     }
 
-    // SETNX（不存在则设置）
     public Long setnx(String key, String value) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            return jedis.setnx(key, value);
-        } catch (JedisException e) {
+        try {
+            return redisCommandClient.setnx(key, value);
+        } catch (Exception e) {
             logger.error("Redis setnx error, key: {}", key, e);
             return 0L;
         }
     }
 
-    // 设置过期时间
     public void expire(String key, long seconds) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            jedis.expire(key, (int) seconds);
-        } catch (JedisException e) {
+        try {
+            redisCommandClient.expire(key, seconds);
+        } catch (Exception e) {
             logger.error("Redis expire error, key: {}", key, e);
         }
+    }
+
+    /**
+     * Execute a Lua script atomically via RedisCommandClient.
+     */
+    public Object eval(String luaScript, java.util.List<String> keys, java.util.List<String> args) {
+        try {
+            return redisCommandClient.eval(luaScript, keys, args);
+        } catch (Exception e) {
+            logger.error("Redis eval error, script: {}", luaScript, e);
+            return null;
+        }
+    }
+
+    /**
+     * Execute a Lua script without swallowing the exception.
+     * Cache loading needs this distinction: a return value of 0 means lock contention,
+     * while an exception means Redis is unavailable and the request should fail open to DB.
+     */
+    public Object evalStrict(String luaScript, java.util.List<String> keys, java.util.List<String> args) {
+        return redisCommandClient.eval(luaScript, keys, args);
     }
 }

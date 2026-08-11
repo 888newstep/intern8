@@ -1,0 +1,43 @@
+﻿# Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Build
+build/
+dist/
+out/
+
+# Test
+*.pyc
+__pycache__/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Patch files
+*.diff
+*.patch

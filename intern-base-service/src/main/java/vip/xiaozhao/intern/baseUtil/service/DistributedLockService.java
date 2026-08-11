@@ -9,30 +9,27 @@ import org.springframework.stereotype.Service;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 分布式锁服务（基于Redisson）
- * 解决：多人同时发布动态/点赞/评论等场景下的并发冲突
- * 原理：Redisson RLock 基于 Redis 哨兵/集群的 Lua 脚本实现，自动续期防死锁
- */
+ * 閸掑棗绔峰蹇涙敚閺堝秴濮熼敍鍫濈唨娴滃冻edisson閿? * 鐟欙絽鍠呴敍姘樋娴滃搫鎮撻弮璺哄絺鐢啫濮╅幀?閻愮绂?鐠囧嫯顔戠粵澶婃簚閺咁垯绗呴惃鍕嫙閸欐垵鍟跨粣? * 閸樼喓鎮婇敍姝奺disson RLock 閸╄桨绨?Redis 閸濄劌鍙?闂嗗棛鍏㈤惃?Lua 閼存碍婀扮€圭偟骞囬敍宀冨殰閸斻劎鐢婚張鐔兼Щ濮濆鏀? */
 @Service
 public class DistributedLockService {
 
     private static final Logger logger = LoggerFactory.getLogger(DistributedLockService.class);
 
-    /** 默认锁等待时间：3秒 */
+    /** 姒涙顓婚柨浣虹搼瀵板懏妞傞梻杈剧窗3缁?*/
     private static final long DEFAULT_WAIT_TIME = 3L;
 
-    /** 默认锁持有时间：10秒（Redisson自动续期，实际不会超时） */
+    /** 姒涙顓婚柨浣瑰瘮閺堝妞傞梻杈剧窗10缁夋帪绱橰edisson閼奉亜濮╃紒顓熸埂閿涘苯鐤勯梽鍛瑝娴兼俺绉撮弮璁圭礆 */
     private static final long DEFAULT_LEASE_TIME = 10L;
 
-    // ======================= 锁前缀 =======================
-    private static final String LOCK_PREFIX = "lock:";
-    /** 动态发布锁 */
+    // ======================= 闁夸礁澧犵紓鈧?=======================
+    public static final String LOCK_PREFIX = "lock:";
+    /** 閸斻劍鈧礁褰傜敮鍐敚 */
     public static final String LOCK_DYNAMIC_PUBLISH = LOCK_PREFIX + "dynamic:publish:";
-    /** 动态点赞锁 */
+    /** 閸斻劍鈧胶鍋ｇ挧鐐烘敚 */
     public static final String LOCK_DYNAMIC_LIKE = LOCK_PREFIX + "dynamic:like:";
-    /** 动态评论锁 */
+    /** 閸斻劍鈧浇鐦庣拋娲敚 */
     public static final String LOCK_DYNAMIC_COMMENT = LOCK_PREFIX + "dynamic:comment:";
-    /** 关注操作锁 */
+    /** 閸忚櫕鏁為幙宥勭稊闁?*/
     public static final String LOCK_FOLLOW = LOCK_PREFIX + "follow:";
 
     private final RedissonClient redissonClient;
@@ -42,22 +39,20 @@ public class DistributedLockService {
     }
 
     /**
-     * 尝试获取分布式锁（带默认超时）
-     *
-     * @param lockKey 锁的Key
-     * @return 锁实例，获取不到返回null
+     * 鐏忔繆鐦懢宄板絿閸掑棗绔峰蹇涙敚閿涘牆鐢妯款吇鐡掑懏妞傞敍?     *
+     * @param lockKey 闁夸胶娈慘ey
+     * @return 闁夸礁鐤勬笟瀣剁礉閼惧嘲褰囨稉宥呭煂鏉╂柨娲杗ull
      */
     public RLock tryLock(String lockKey) {
         return tryLock(lockKey, DEFAULT_WAIT_TIME, DEFAULT_LEASE_TIME);
     }
 
     /**
-     * 尝试获取分布式锁
+     * 鐏忔繆鐦懢宄板絿閸掑棗绔峰蹇涙敚
      *
-     * @param lockKey   锁的Key
-     * @param waitTime  等待锁的最长时间（秒）
-     * @param leaseTime 锁持有时间（秒，Redisson自动续期）
-     * @return 锁实例，获取不到返回null
+     * @param lockKey   闁夸胶娈慘ey
+     * @param waitTime  缁涘绶熼柨浣烘畱閺堚偓闂€鎸庢闂傝揪绱欑粔鎺炵礆
+     * @param leaseTime 闁夸焦瀵旈張澶嬫闂傝揪绱欑粔鎺炵礉Redisson閼奉亜濮╃紒顓熸埂閿?     * @return 闁夸礁鐤勬笟瀣剁礉閼惧嘲褰囨稉宥呭煂鏉╂柨娲杗ull
      */
     public RLock tryLock(String lockKey, long waitTime, long leaseTime) {
         RLock lock = redissonClient.getLock(lockKey);
@@ -78,8 +73,7 @@ public class DistributedLockService {
     }
 
     /**
-     * 释放分布式锁
-     */
+     * 闁插﹥鏂侀崚鍡楃瀵繘鏀?     */
     public void unlock(RLock lock) {
         if (lock != null && lock.isHeldByCurrentThread()) {
             try {
@@ -92,12 +86,11 @@ public class DistributedLockService {
     }
 
     /**
-     * 带锁执行任务
+     * 鐢箓鏀ｉ幍褑顢戞禒璇插
      *
-     * @param lockKey  锁的Key
-     * @param task     需要执行的任务
-     * @param <T>      返回值类型
-     * @return 任务执行结果，获取锁失败返回null
+     * @param lockKey  闁夸胶娈慘ey
+     * @param task     闂団偓鐟曚焦澧界悰宀€娈戞禒璇插
+     * @param <T>      鏉╂柨娲栭崐鑲╄閸?     * @return 娴犺濮熼幍褑顢戠紒鎾寸亯閿涘矁骞忛崣鏍敚婢惰精瑙︽潻鏂挎礀null
      */
     public <T> T executeWithLock(String lockKey, LockTask<T> task) {
         RLock lock = tryLock(lockKey);
@@ -112,10 +105,13 @@ public class DistributedLockService {
     }
 
     /**
-     * 带锁执行任务（无返回值）
-     */
+     * 鐢箓鏀ｉ幍褑顢戞禒璇插閿涘牊妫ゆ潻鏂挎礀閸婄》绱?     */
     public boolean executeWithLockVoid(String lockKey, Runnable task) {
-        RLock lock = tryLock(lockKey);
+        return executeWithLockVoid(lockKey, DEFAULT_WAIT_TIME, DEFAULT_LEASE_TIME, task);
+    }
+
+    public boolean executeWithLockVoid(String lockKey, long waitTime, long leaseTime, Runnable task) {
+        RLock lock = tryLock(lockKey, waitTime, leaseTime);
         if (lock == null) {
             return false;
         }

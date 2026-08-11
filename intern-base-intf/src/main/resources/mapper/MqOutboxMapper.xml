@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="vip.xiaozhao.intern.baseUtil.intf.mapper.MqOutboxMapper">
+
+    <resultMap id="BaseResultMap" type="vip.xiaozhao.intern.baseUtil.intf.entity.MqOutbox">
+        <id column="id" property="id"/>
+        <result column="event_id" property="eventId"/>
+        <result column="event_type" property="eventType"/>
+        <result column="exchange_name" property="exchangeName"/>
+        <result column="routing_key" property="routingKey"/>
+        <result column="message_body" property="messageBody"/>
+        <result column="status" property="status"/>
+        <result column="retry_count" property="retryCount"/>
+        <result column="next_attempt_time" property="nextAttemptTime"/>
+        <result column="lease_until" property="leaseUntil"/>
+        <result column="last_error" property="lastError"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="vip.xiaozhao.intern.baseUtil.intf.entity.MqOutbox">
+        INSERT INTO mq_outbox (
+            event_id, event_type, exchange_name, routing_key, message_body,
+            status, retry_count, next_attempt_time, lease_until, last_error,
+            create_time, update_time
+        ) VALUES (
+            #{eventId}, #{eventType}, #{exchangeName}, #{routingKey}, #{messageBody},
+            #{status}, #{retryCount}, #{nextAttemptTime}, #{leaseUntil}, #{lastError},
+            #{createTime}, #{updateTime}
+        )
+    </insert>
+
+    <select id="selectByEventId" resultMap="BaseResultMap">
+        SELECT * FROM mq_outbox WHERE event_id = #{eventId}
+    </select>
+
+    <select id="selectDispatchable" resultMap="BaseResultMap">
+        SELECT *
+        FROM mq_outbox
+        WHERE retry_count &lt; #{maxRetryCount}
+          AND (
+              status = 0
+              OR (status = 3 AND next_attempt_time &lt;= NOW())
+              OR (status = 1 AND lease_until &lt;= NOW())
+          )
+        ORDER BY next_attempt_time ASC, id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="claim">
+        UPDATE mq_outbox
+        SET status = 1,
+            lease_until = #{leaseUntil},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND retry_count &lt; #{maxRetryCount}
+          AND (
+              status = 0
+              OR (status = 3 AND next_attempt_time &lt;= NOW())
+              OR (status = 1 AND lease_until &lt;= NOW())
+          )
+    </update>
+
+    <update id="markDispatched">
+        UPDATE mq_outbox
+        SET status = 2,
+            lease_until = NULL,
+            last_error = NULL,
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 1
+    </update>
+
+    <update id="markFailed">
+        UPDATE mq_outbox
+        SET status = #{status},
+            retry_count = #{retryCount},
+            next_attempt_time = #{nextAttemptTime},
+            lease_until = NULL,
+            last_error = #{lastError},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 1
+    </update>
+
+</mapper>

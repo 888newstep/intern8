@@ -3,6 +3,7 @@ package vip.xiaozhao.intern.baseUtil.controller;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import vip.xiaozhao.intern.baseUtil.intf.dto.ResponseDO;
@@ -14,11 +15,14 @@ import vip.xiaozhao.intern.baseUtil.intf.service.NotificationService;
 import vip.xiaozhao.intern.baseUtil.utils.RedisUtil;
 
 import jakarta.validation.Valid;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
-@Tag(name = "通知管理")
+@Tag(name = "????")
 @RestController
 @RequestMapping("/api/notification")
 @Validated
@@ -27,29 +31,41 @@ public class NotificationController extends BaseController {
     private final RedisUtil redisUtil;
     private final NotificationService notificationService;
     private final TuiNotificationMapper notificationMapper;
+    private final Set<Long> adminIds;
 
     public NotificationController(RedisUtil redisUtil, NotificationService notificationService,
-                                  TuiNotificationMapper notificationMapper) {
+                                  TuiNotificationMapper notificationMapper,
+                                  @Value("${system.notification.admin-ids:}") String adminIdsConfig) {
         this.redisUtil = redisUtil;
         this.notificationService = notificationService;
         this.notificationMapper = notificationMapper;
+        this.adminIds = Arrays.stream(adminIdsConfig.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(Long::parseLong)
+                .collect(Collectors.toSet());
     }
 
     private static final String UNREAD_COUNT_PREFIX = "notification:unread:count:";
     private static final String LAST_REFRESH_PREFIX = "notification:last:refresh:";
 
-    @Operation(summary = "获取未读通知数量", description = "获取用户的未读通知数量和最后刷新时间戳，Redis优先，DB兜底")
+    @Operation(summary = "????????", description = "????????????????????Redis???DB??")
     @PostMapping("/unread/count")
-    public ResponseDO getUnreadCount(@Parameter(description = "请求参数", required = true) @Valid @RequestBody UnreadCountRequest request) {
-        String key = UNREAD_COUNT_PREFIX + request.getUserId();
+    public ResponseDO getUnreadCount(@Parameter(description = "????", required = true) @Valid @RequestBody UnreadCountRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+
+        String key = UNREAD_COUNT_PREFIX + currentUserId;
         Long count = redisUtil.getCount(key);
 
         if (count == 0) {
-            Integer dbCount = notificationMapper.countUnread(request.getUserId());
+            Integer dbCount = notificationMapper.countUnread(currentUserId);
             count = dbCount == null ? 0L : dbCount.longValue();
         }
 
-        String refreshKey = LAST_REFRESH_PREFIX + request.getUserId();
+        String refreshKey = LAST_REFRESH_PREFIX + currentUserId;
         String lastRefresh = redisUtil.get(refreshKey);
 
         Map<String, Object> result = new HashMap<>();
@@ -59,27 +75,37 @@ public class NotificationController extends BaseController {
         return success(result);
     }
 
-    @Operation(summary = "标记所有通知为已读", description = "标记用户的所有通知为已读，清空Redis计数")
+    @Operation(summary = "?????????", description = "???????????????Redis??")
     @PostMapping("/read/all")
-    public ResponseDO markAllAsRead(@Parameter(description = "请求参数", required = true) @Valid @RequestBody MarkReadRequest request) {
-        String key = UNREAD_COUNT_PREFIX + request.getUserId();
+    public ResponseDO markAllAsRead(@Parameter(description = "????", required = true) @Valid @RequestBody MarkReadRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+
+        String key = UNREAD_COUNT_PREFIX + currentUserId;
         redisUtil.delete(key);
 
-        String refreshKey = LAST_REFRESH_PREFIX + request.getUserId();
+        String refreshKey = LAST_REFRESH_PREFIX + currentUserId;
         redisUtil.set(refreshKey, String.valueOf(System.currentTimeMillis()));
 
-        notificationMapper.updateIsRead(request.getUserId());
+        notificationMapper.updateIsRead(currentUserId);
 
-        return success("标记成功");
+        return success("????");
     }
 
-    @Operation(summary = "获取通知列表", description = "获取用户的通知列表，采用游标分页")
+    @Operation(summary = "??????", description = "????????????????")
     @PostMapping("/list")
-    public ResponseDO getNotificationList(@Parameter(description = "通知列表请求", required = true) @Valid @RequestBody NotificationListRequest request) {
+    public ResponseDO getNotificationList(@Parameter(description = "??????", required = true) @Valid @RequestBody NotificationListRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+
         Long cursor = request.getCursor() == null ? Long.MAX_VALUE : request.getCursor();
         Integer limit = request.getLimit() == null ? 20 : request.getLimit();
 
-        List<TuiNotification> notifications = notificationMapper.selectByUserId(request.getUserId(), cursor, limit);
+        List<TuiNotification> notifications = notificationMapper.selectByUserId(currentUserId, cursor, limit);
 
         NotificationListResponse response = new NotificationListResponse(
                 notifications,
@@ -90,38 +116,63 @@ public class NotificationController extends BaseController {
         return success(response);
     }
 
-    @Operation(summary = "删除通知", description = "删除指定通知")
+    @Operation(summary = "????", description = "??????")
     @PostMapping("/delete")
-    public ResponseDO deleteNotification(@Parameter(description = "删除请求", required = true) @Valid @RequestBody DeleteNotificationRequest request) {
+    public ResponseDO deleteNotification(@Parameter(description = "????", required = true) @Valid @RequestBody DeleteNotificationRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+
         TuiNotification notification = notificationMapper.selectById(request.getNotificationId());
         if (notification == null) {
-            return fail("通知不存在");
+            return fail("?????");
+        }
+        if (!currentUserId.equals(notification.getUserId())) {
+            return forbidden();
         }
         notificationMapper.deleteById(request.getNotificationId());
-        return success("删除成功");
+        return success("????");
     }
 
-    @Operation(summary = "获取通知详情", description = "获取单条通知的详细信息")
+    @Operation(summary = "??????", description = "???????????")
     @GetMapping("/detail/{id}")
-    public ResponseDO getNotificationDetail(@Parameter(description = "通知ID", required = true) @PathVariable Long id) {
+    public ResponseDO getNotificationDetail(@Parameter(description = "??ID", required = true) @PathVariable Long id) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+
         TuiNotification notification = notificationMapper.selectById(id);
         if (notification == null) {
-            return fail("通知不存在");
+            return fail("?????");
+        }
+        if (!currentUserId.equals(notification.getUserId())) {
+            return forbidden();
         }
         return success(notification);
     }
 
-    @Operation(summary = "发送系统通知", description = "发送系统通知给指定用户")
+    @Operation(summary = "??????", description = "???????????????????")
     @PostMapping("/system/send")
-    public ResponseDO sendSystemNotification(@Parameter(description = "系统通知请求", required = true) @Valid @RequestBody SystemNotificationRequest request) {
+    public ResponseDO sendSystemNotification(@Parameter(description = "??????", required = true) @Valid @RequestBody SystemNotificationRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        
+        if (!adminIds.contains(currentUserId)) {
+            return forbidden();
+        }
+
         notificationService.sendNotification(
-                request.getUserId(),
+                request.getTargetUserId(),
                 0L,
                 5,
                 request.getContent(),
                 "SYSTEM"
         );
 
-        return success("发送成功");
+        return success("????");
     }
 }

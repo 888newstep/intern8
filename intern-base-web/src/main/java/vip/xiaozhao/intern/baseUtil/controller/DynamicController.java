@@ -12,6 +12,7 @@ import vip.xiaozhao.intern.baseUtil.intf.dto.response.FollowCountResponse;
 import vip.xiaozhao.intern.baseUtil.intf.dto.response.FollowStatusResponse;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiDynamic;
 import vip.xiaozhao.intern.baseUtil.intf.service.DynamicService;
+import vip.xiaozhao.intern.baseUtil.service.ApiIdempotencyService;
 import vip.xiaozhao.intern.baseUtil.service.RateLimiterService;
 
 import jakarta.validation.Valid;
@@ -25,34 +26,47 @@ public class DynamicController extends BaseController {
 
     private final DynamicService dynamicService;
     private final RateLimiterService rateLimiterService;
+    private final ApiIdempotencyService apiIdempotencyService;
 
     public DynamicController(DynamicService dynamicService,
-                             RateLimiterService rateLimiterService) {
+                             RateLimiterService rateLimiterService,
+                             ApiIdempotencyService apiIdempotencyService) {
         this.dynamicService = dynamicService;
         this.rateLimiterService = rateLimiterService;
+        this.apiIdempotencyService = apiIdempotencyService;
     }
 
     @Operation(summary = "发布动态", description = "发布用户动态，支持文本和图片，每分钟限5条，分布式锁防止重复提交")
     @PostMapping("/publish")
-    public ResponseDO publishDynamic(@Parameter(description = "动态信息", required = true) @Valid @RequestBody DynamicPublishRequest request) {
-        // 分布式限流：每分钟最多5条
-        if (!rateLimiterService.tryAcquirePublish(request.getUserId())) {
-            return fail(429, "发布太频繁，每分钟最多发布5条动态");
+    public ResponseDO publishDynamic(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Parameter(description = "动态信息", required = true) @Valid @RequestBody DynamicPublishRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
         }
-
-        // 同步写入DB（锁+事务+雪花ID），异步发送7天归档消息（afterCommit）
-        dynamicService.saveDynamic(request.getUserId(), request.getContent(), request.getImages());
-
-        return success("发布成功");
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/dynamic/publish",
+                idempotencyKey, request, () -> {
+                    // 幂等占有成功后再消耗限流额度，重复请求不会重复扣配额。
+                    if (!rateLimiterService.tryAcquirePublish(currentUserId)) {
+                        return fail(429, "发布太频繁，每分钟最多发布5条动态");
+                    }
+                    dynamicService.saveDynamic(currentUserId, request.getContent(), request.getImages());
+                    return success("发布成功");
+                });
     }
 
     @Operation(summary = "获取推友圈信息流", description = "获取用户关注的推友动态，采用游标分页")
     @PostMapping("/feed")
     public ResponseDO getFeed(@Parameter(description = "信息流请求", required = true) @Valid @RequestBody FeedRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
         Long cursor = request.getCursor() == null ? Long.MAX_VALUE : request.getCursor();
         Integer limit = request.getLimit() == null ? 20 : request.getLimit();
 
-        List<TuiDynamic> dynamics = dynamicService.getFeed(request.getUserId(), cursor, limit);
+        List<TuiDynamic> dynamics = dynamicService.getFeed(currentUserId, cursor, limit);
 
         FeedResponse response = new FeedResponse(
                 dynamics,
@@ -66,10 +80,14 @@ public class DynamicController extends BaseController {
     @Operation(summary = "获取用户动态列表", description = "获取指定用户的动态列表，采用游标分页")
     @PostMapping("/user/list")
     public ResponseDO getUserDynamics(@Parameter(description = "用户动态请求", required = true) @Valid @RequestBody UserDynamicRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
         Long cursor = request.getCursor() == null ? Long.MAX_VALUE : request.getCursor();
         Integer limit = request.getLimit() == null ? 20 : request.getLimit();
 
-        List<TuiDynamic> dynamics = dynamicService.getUserDynamics(request.getUserId(), cursor, limit);
+        List<TuiDynamic> dynamics = dynamicService.getUserDynamics(currentUserId, cursor, limit);
 
         FeedResponse response = new FeedResponse(
                 dynamics,
@@ -89,58 +107,99 @@ public class DynamicController extends BaseController {
 
     @Operation(summary = "点赞动态", description = "对动态进行点赞（每分钟限30次）")
     @PostMapping("/like")
-    public ResponseDO likeDynamic(@Parameter(description = "点赞请求", required = true) @Valid @RequestBody LikeRequest request) {
-        // 分布式限流：每分钟最多30次点赞
-        if (!rateLimiterService.tryAcquireLike(request.getUserId())) {
-            return fail(429, "操作太频繁，每分钟最多点赞30次");
+    public ResponseDO likeDynamic(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Parameter(description = "点赞请求", required = true) @Valid @RequestBody LikeRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
         }
-        dynamicService.likeDynamic(request.getUserId(), request.getDynamicId());
-        return success("点赞成功");
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/dynamic/like",
+                idempotencyKey, request, () -> {
+                    if (!rateLimiterService.tryAcquireLike(currentUserId)) {
+                        return fail(429, "操作太频繁，每分钟最多点赞30次");
+                    }
+                    dynamicService.likeDynamic(currentUserId, request.getDynamicId());
+                    return success("点赞成功");
+                });
     }
 
     @Operation(summary = "评论动态", description = "对动态进行评论（每分钟限20次）")
     @PostMapping("/comment")
-    public ResponseDO commentDynamic(@Parameter(description = "评论请求", required = true) @Valid @RequestBody CommentRequest request) {
-        // 分布式限流：每分钟最多20次评论
-        if (!rateLimiterService.tryAcquireComment(request.getUserId())) {
-            return fail(429, "操作太频繁，每分钟最多评论20次");
+    public ResponseDO commentDynamic(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Parameter(description = "评论请求", required = true) @Valid @RequestBody CommentRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
         }
-        dynamicService.commentDynamic(request.getUserId(), request.getDynamicId(), request.getContent());
-        return success("评论成功");
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/dynamic/comment",
+                idempotencyKey, request, () -> {
+                    if (!rateLimiterService.tryAcquireComment(currentUserId)) {
+                        return fail(429, "操作太频繁，每分钟最多评论20次");
+                    }
+                    dynamicService.commentDynamic(currentUserId, request.getDynamicId(), request.getContent());
+                    return success("评论成功");
+                });
     }
 
     @Operation(summary = "分享动态", description = "分享动态")
     @PostMapping("/share")
-    public ResponseDO shareDynamic(@Parameter(description = "分享请求", required = true) @Valid @RequestBody ShareRequest request) {
-        dynamicService.shareDynamic(request.getUserId(), request.getDynamicId());
-        return success("分享成功");
+    public ResponseDO shareDynamic(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Parameter(description = "分享请求", required = true) @Valid @RequestBody ShareRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/dynamic/share",
+                idempotencyKey, request, () -> {
+                    dynamicService.shareDynamic(currentUserId, request.getDynamicId());
+                    return success("分享成功");
+                });
     }
 
     @Operation(summary = "删除动态", description = "删除自己的动态")
     @PostMapping("/delete")
     public ResponseDO deleteDynamic(@Parameter(description = "删除请求", required = true) @Valid @RequestBody DeleteDynamicRequest request) {
-        dynamicService.deleteDynamic(request.getUserId(), request.getDynamicId());
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        dynamicService.deleteDynamic(currentUserId, request.getDynamicId());
         return success("删除成功");
     }
 
     @Operation(summary = "关注用户", description = "关注指定用户")
     @PostMapping("/follow")
     public ResponseDO follow(@Parameter(description = "关注请求", required = true) @Valid @RequestBody FollowRequest request) {
-        dynamicService.follow(request.getUserId(), request.getFollowUserId());
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        dynamicService.follow(currentUserId, request.getFollowUserId());
         return success("关注成功");
     }
 
     @Operation(summary = "取消关注", description = "取消关注指定用户")
     @PostMapping("/unfollow")
     public ResponseDO unfollow(@Parameter(description = "取消关注请求", required = true) @Valid @RequestBody FollowRequest request) {
-        dynamicService.unfollow(request.getUserId(), request.getFollowUserId());
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        dynamicService.unfollow(currentUserId, request.getFollowUserId());
         return success("取消关注成功");
     }
 
     @Operation(summary = "检查关注状态", description = "检查是否已关注指定用户")
     @PostMapping("/follow/check")
     public ResponseDO checkFollow(@Parameter(description = "关注状态请求", required = true) @Valid @RequestBody FollowRequest request) {
-        Boolean isFollowing = dynamicService.isFollowing(request.getUserId(), request.getFollowUserId());
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        Boolean isFollowing = dynamicService.isFollowing(currentUserId, request.getFollowUserId());
         return success(new FollowStatusResponse(isFollowing));
     }
 

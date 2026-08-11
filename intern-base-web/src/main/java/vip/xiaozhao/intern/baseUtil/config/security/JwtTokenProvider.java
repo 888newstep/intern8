@@ -1,6 +1,8 @@
 package vip.xiaozhao.intern.baseUtil.config.security;
 
-import io.jsonwebtoken.*;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +12,7 @@ import org.springframework.stereotype.Component;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.UUID;
 
 @Component
 public class JwtTokenProvider {
@@ -18,12 +21,15 @@ public class JwtTokenProvider {
 
     private final SecretKey secretKey;
     private final long expirationMs;
+    private final String issuer;
 
     public JwtTokenProvider(
             @Value("${jwt.secret}") String jwtSecret,
+            @Value("${jwt.issuer:intern-base}") String issuer,
             @Value("${jwt.expiration:86400000}") long expirationMs) {
         this.secretKey = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
         this.expirationMs = expirationMs;
+        this.issuer = issuer;
     }
 
     public String generateToken(Long userId) {
@@ -31,9 +37,12 @@ public class JwtTokenProvider {
         Date expiryDate = new Date(now.getTime() + expirationMs);
 
         return Jwts.builder()
+                .issuer(issuer)
                 .subject(String.valueOf(userId))
                 .issuedAt(now)
+                .notBefore(now)
                 .expiration(expiryDate)
+                .id(UUID.randomUUID().toString().replace("-", ""))
                 .signWith(secretKey)
                 .compact();
     }
@@ -41,6 +50,7 @@ public class JwtTokenProvider {
     public Long getUserIdFromToken(String token) {
         Claims claims = Jwts.parser()
                 .verifyWith(secretKey)
+                .requireIssuer(issuer)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
@@ -49,7 +59,11 @@ public class JwtTokenProvider {
 
     public boolean validateToken(String token) {
         try {
-            Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token);
+            Jwts.parser()
+                    .verifyWith(secretKey)
+                    .requireIssuer(issuer)
+                    .build()
+                    .parseSignedClaims(token);
             return true;
         } catch (JwtException | IllegalArgumentException e) {
             logger.error("Invalid JWT token: {}", e.getMessage());

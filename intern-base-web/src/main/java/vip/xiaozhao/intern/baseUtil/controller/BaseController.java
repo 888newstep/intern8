@@ -1,12 +1,11 @@
 package vip.xiaozhao.intern.baseUtil.controller;
 
 import com.google.gson.Gson;
-import org.apache.commons.lang3.math.NumberUtils;
 import org.springframework.beans.factory.annotation.Value;
-import vip.xiaozhao.intern.baseUtil.intf.constant.CommonConstant;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import vip.xiaozhao.intern.baseUtil.intf.dto.ResponseDO;
-
-import jakarta.servlet.http.HttpServletRequest;
+import vip.xiaozhao.intern.baseUtil.intf.exception.ErrorCode;
 
 public class BaseController {
 
@@ -20,13 +19,25 @@ public class BaseController {
     @Value("${home.url}")
     protected String PreFix;
 
-    protected int getCurrentUserId(HttpServletRequest request){
-        Object uId = request.getAttribute(CommonConstant.LOGIN_USERID_KEY);
-        if (uId == null){
-            return -1;
-        }else {
-            return NumberUtils.toInt(uId.toString());
+    protected Long getCurrentUserId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return null;
         }
+
+        Object principal = authentication.getPrincipal();
+        if (principal instanceof Number) {
+            return ((Number) principal).longValue();
+        }
+        if (principal instanceof String) {
+            try {
+                return Long.parseLong((String) principal);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     protected ResponseDO success(Object data) {
@@ -45,5 +56,12 @@ public class BaseController {
         return ResponseDO.fail(errorCode, message);
     }
 
+    protected ResponseDO unauthorized() {
+        return fail(ErrorCode.UNAUTHORIZED.getCode(), ErrorCode.UNAUTHORIZED.getMessage());
+    }
+
+    protected ResponseDO forbidden() {
+        return fail(ErrorCode.FORBIDDEN.getCode(), ErrorCode.FORBIDDEN.getMessage());
+    }
 
 }

@@ -45,6 +45,18 @@ class DynamicServiceTest {
     @Mock
     private SnowflakeIdGenerator snowflakeIdGenerator;
 
+    @Mock
+    private vip.xiaozhao.intern.baseUtil.intf.mapper.TuiCommentMapper commentMapper;
+
+    @Mock
+    private vip.xiaozhao.intern.baseUtil.intf.mapper.TuiLikeMapper likeMapper;
+
+    @Mock
+    private RedisCacheService redisCacheService;
+
+    @Mock
+    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
+
     @InjectMocks
     private DynamicServiceImpl dynamicService;
 
@@ -53,10 +65,11 @@ class DynamicServiceTest {
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
         testDynamic = new TuiDynamic();
         testDynamic.setId(1L);
         testDynamic.setUserId(100L);
-        testDynamic.setContent("测试动态内容");
+        testDynamic.setContent("Test content");
         testDynamic.setLikeCount(10);
         testDynamic.setCommentCount(5);
         testDynamic.setShareCount(3);
@@ -80,22 +93,30 @@ class DynamicServiceTest {
 
     @Test
     void getDynamicById_Success() {
+        when(redisCacheService.get(anyString(), eq(TuiDynamic.class), any(java.util.function.Supplier.class)))
+                .thenAnswer(invocation -> {
+                    java.util.function.Supplier<TuiDynamic> supplier = invocation.getArgument(2);
+                    return supplier.get();
+                });
         when(dynamicMapper.selectById(1L)).thenReturn(testDynamic);
 
         TuiDynamic result = dynamicService.getDynamicById(1L);
 
         assertNotNull(result);
         assertEquals(1L, result.getId());
-        assertEquals("测试动态内容", result.getContent());
-        verify(dynamicMapper, times(1)).selectById(1L);
+        assertEquals("Test content", result.getContent());
     }
 
     @Test
     void getDynamicById_NotFound() {
+        when(redisCacheService.get(anyString(), eq(TuiDynamic.class), any(java.util.function.Supplier.class)))
+                .thenAnswer(invocation -> {
+                    java.util.function.Supplier<TuiDynamic> supplier = invocation.getArgument(2);
+                    return supplier.get();
+                });
         when(dynamicMapper.selectById(999L)).thenReturn(null);
 
         assertThrows(BusinessException.class, () -> dynamicService.getDynamicById(999L));
-        verify(dynamicMapper, times(1)).selectById(999L);
     }
 
     @Test
@@ -220,13 +241,43 @@ class DynamicServiceTest {
     void getFeed_Success() {
         List<TuiDynamic> dynamics = new ArrayList<>();
         dynamics.add(testDynamic);
-        when(dynamicMapper.selectFeedByCursor(100L, Long.MAX_VALUE, 20)).thenReturn(dynamics);
+        when(dynamicMapper.selectFeedDynamicIds(100L, Long.MAX_VALUE, 20))
+                .thenReturn(List.of(1L));
+        when(dynamicMapper.selectByIds(List.of(1L))).thenReturn(dynamics);
 
         List<TuiDynamic> result = dynamicService.getFeed(100L, null, null);
 
         assertNotNull(result);
         assertEquals(1, result.size());
-        verify(dynamicMapper, times(1)).selectFeedByCursor(100L, Long.MAX_VALUE, 20);
+        verify(dynamicMapper, times(1)).selectFeedDynamicIds(100L, Long.MAX_VALUE, 20);
+        verify(dynamicMapper, times(1)).selectByIds(List.of(1L));
+    }
+
+    @Test
+    void getFeed_ShouldRestoreIdQueryOrderAndSkipRowsDeletedBeforeHydration() {
+        TuiDynamic first = new TuiDynamic();
+        first.setId(10L);
+        TuiDynamic second = new TuiDynamic();
+        second.setId(20L);
+
+        when(dynamicMapper.selectFeedDynamicIds(100L, 50L, 3))
+                .thenReturn(List.of(30L, 20L, 10L));
+        // 回表顺序不保证与 ID 查询一致，且 30L 模拟在两阶段之间被删除。
+        when(dynamicMapper.selectByIds(List.of(30L, 20L, 10L)))
+                .thenReturn(List.of(first, second));
+
+        List<TuiDynamic> result = dynamicService.getFeed(100L, 50L, 3);
+
+        assertEquals(List.of(20L, 10L), result.stream().map(TuiDynamic::getId).toList());
+    }
+
+    @Test
+    void getFeed_ShouldNotHydrateWhenNoCandidateIds() {
+        when(dynamicMapper.selectFeedDynamicIds(100L, Long.MAX_VALUE, 20))
+                .thenReturn(List.of());
+
+        assertTrue(dynamicService.getFeed(100L, null, null).isEmpty());
+        verify(dynamicMapper, never()).selectByIds(anyList());
     }
 
     @Test

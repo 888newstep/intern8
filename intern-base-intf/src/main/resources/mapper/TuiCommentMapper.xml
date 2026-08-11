@@ -26,7 +26,7 @@
         WHERE id = #{id} AND status = 0
     </select>
 
-    <select id="selectByDynamicId" resultMap="commentResultMap">
+    <select id="selectByDynamicId" resultMap="commentResultMap" timeout="5">
         SELECT id, dynamic_id, user_id, content, parent_id, reply_user_id, like_count, status, create_time, update_time
         FROM tui_comment
         WHERE dynamic_id = #{dynamicId} AND status = 0 AND id <![CDATA[ < ]]> #{cursor}
@@ -42,7 +42,7 @@
         UPDATE tui_comment SET status = 1, update_time = NOW() WHERE id = #{id}
     </update>
 
-    <select id="countByDynamicId" resultType="java.lang.Integer">
+    <select id="countByDynamicId" resultType="java.lang.Integer" timeout="3">
         SELECT COUNT(*) FROM tui_comment WHERE dynamic_id = #{dynamicId} AND status = 0
     </select>
 

@@ -59,3 +59,59 @@ CREATE TABLE IF NOT EXISTS `tui_comment` (
     INDEX `idx_user_id` (`user_id`),
     INDEX `idx_dynamic_status` (`dynamic_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='评论表';
+
+-- ==================== 点赞关系表 ====================
+CREATE TABLE IF NOT EXISTS `tui_like` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT NOT NULL COMMENT '点赞用户ID',
+    `target_id` BIGINT NOT NULL COMMENT '点赞目标ID（动态或评论）',
+    `target_type` TINYINT NOT NULL COMMENT '目标类型：1-动态，2-评论',
+    `status` TINYINT NOT NULL DEFAULT 0 COMMENT '状态：0-正常，1-取消',
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE INDEX `uk_user_target_type` (`user_id`, `target_id`, `target_type`),
+    INDEX `idx_like_lookup` (`user_id`, `target_id`, `target_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='点赞关系表';
+
+-- ==================== MQ message status ====================
+-- This table records publisher confirm, consumer and compensation states.
+CREATE TABLE IF NOT EXISTS `mq_message_status` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `message_id` VARCHAR(64) NOT NULL UNIQUE COMMENT 'Stable message ID',
+    `event_type` VARCHAR(64) NOT NULL COMMENT 'Event type',
+    `business_key` VARCHAR(128) NULL COMMENT 'Business key',
+    `message_body` LONGTEXT NULL COMMENT 'Serialized event payload',
+    `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0-pending, 1-confirmed, 2-failed, 3-consumed, 4-consume-failed, 5-compensating, 6-dead-lettered',
+    `retry_count` INT NOT NULL DEFAULT 0 COMMENT 'Compensation/retry count',
+    `last_error` TEXT NULL COMMENT 'Latest failure summary',
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    INDEX `idx_mq_status` (`status`),
+    INDEX `idx_mq_create_time` (`create_time`),
+    INDEX `idx_mq_status_retry` (`status`, `retry_count`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MQ message status';
+
+-- ==================== Transactional MQ Outbox ====================
+-- The business write and this row are committed in the same transaction.
+-- A relay can publish the row after an application crash before publish.
+CREATE TABLE IF NOT EXISTS `mq_outbox` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `event_id` VARCHAR(64) NOT NULL COMMENT 'Stable event ID',
+    `event_type` VARCHAR(64) NOT NULL COMMENT 'Event type',
+    `exchange_name` VARCHAR(128) NOT NULL COMMENT 'RabbitMQ exchange',
+    `routing_key` VARCHAR(128) NOT NULL COMMENT 'RabbitMQ routing key',
+    `message_body` LONGTEXT NOT NULL COMMENT 'Serialized event payload',
+    `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0-pending, 1-processing, 2-dispatched, 3-failed, 4-dead-lettered',
+    `retry_count` INT NOT NULL DEFAULT 0 COMMENT 'Number of relay retries',
+    `next_attempt_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `lease_until` DATETIME NULL COMMENT 'Relay lease expiry',
+    `last_error` VARCHAR(1000) NULL COMMENT 'Latest relay failure summary',
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE INDEX `uk_mq_outbox_event_id` (`event_id`),
+    INDEX `idx_mq_outbox_dispatch` (`status`, `next_attempt_time`, `id`),
+    INDEX `idx_mq_outbox_lease` (`status`, `lease_until`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Transactional MQ outbox';

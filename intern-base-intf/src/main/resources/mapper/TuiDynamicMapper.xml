@@ -26,19 +26,56 @@
         WHERE id = #{id} AND status = 0
     </select>
 
-    <select id="selectFeedByCursor" resultMap="dynamicResultMap">
-        SELECT d.id, d.user_id, d.content, d.images, d.like_count, d.comment_count, d.share_count, d.create_time, d.update_time, d.status
+    <select id="selectFeedDynamicIds" resultType="java.lang.Long" timeout="5">
+        SELECT d.id
         FROM tui_dynamic d
-        INNER JOIN tui_follow f ON d.user_id = f.follow_user_id
-        WHERE f.user_id = #{userId} AND f.status = 0 AND d.status = 0 AND d.id < #{cursor}
+        WHERE d.status = 0
+          AND d.id &lt; #{cursor}
+          AND EXISTS (
+              SELECT 1
+              FROM tui_follow f
+              WHERE f.user_id = #{userId}
+                AND f.status = 0
+                AND f.follow_user_id = d.user_id
+          )
         ORDER BY d.id DESC
         LIMIT #{limit}
     </select>
 
-    <select id="selectByUserId" resultMap="dynamicResultMap">
+    <select id="selectByIds" resultMap="dynamicResultMap" timeout="5">
+        <choose>
+            <when test="ids != null and ids.size() > 0">
+                SELECT id, user_id, content, images, like_count, comment_count, share_count,
+                       create_time, update_time, status
+                FROM tui_dynamic
+                WHERE status = 0
+                  AND id IN
+                  <foreach collection="ids" item="id" open="(" separator="," close=")">
+                      #{id}
+                  </foreach>
+            </when>
+            <otherwise>
+                SELECT id, user_id, content, images, like_count, comment_count, share_count,
+                       create_time, update_time, status
+                FROM tui_dynamic
+                WHERE 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="selectFeedByCursor" resultMap="dynamicResultMap" timeout="5">
+        SELECT d.id, d.user_id, d.content, d.images, d.like_count, d.comment_count, d.share_count, d.create_time, d.update_time, d.status
+        FROM tui_dynamic d
+        INNER JOIN tui_follow f ON d.user_id = f.follow_user_id
+        WHERE f.user_id = #{userId} AND f.status = 0 AND d.status = 0 AND d.id &lt; #{cursor}
+        ORDER BY d.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectByUserId" resultMap="dynamicResultMap" timeout="5">
         SELECT id, user_id, content, images, like_count, comment_count, share_count, create_time, update_time, status
         FROM tui_dynamic
-        WHERE user_id = #{userId} AND status = 0 AND id < #{cursor}
+        WHERE user_id = #{userId} AND status = 0 AND id &lt; #{cursor}
         ORDER BY id DESC
         LIMIT #{limit}
     </select>
@@ -63,11 +100,18 @@
         UPDATE tui_dynamic SET status = 2, update_time = NOW() WHERE id = #{id} AND status = 0
     </update>
 
-    <select id="selectUnarchivedBefore" resultType="java.lang.Long">
+    <select id="selectUnarchivedBefore" resultType="java.lang.Long" timeout="10">
         SELECT id FROM tui_dynamic
         WHERE status = 0 AND create_time &lt; #{beforeTime}
         ORDER BY create_time ASC
         LIMIT #{limit}
     </select>
 
+    <select id="selectHotDynamicIds" resultType="java.lang.Long" timeout="5">
+        SELECT id
+        FROM tui_dynamic
+        WHERE status = 0
+        ORDER BY like_count DESC, comment_count DESC, id DESC
+        LIMIT #{limit}
+    </select>
 </mapper>

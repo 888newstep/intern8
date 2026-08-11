@@ -14,6 +14,18 @@ public interface TuiDynamicMapper {
 
     TuiDynamic selectById(Long id);
 
+    /**
+     * 先按游标和关注关系筛选动态 ID，减少排序阶段需要搬运的宽行数据。
+     */
+    List<Long> selectFeedDynamicIds(@Param("userId") Long userId,
+                                    @Param("cursor") Long cursor,
+                                    @Param("limit") Integer limit);
+
+    /**
+     * 根据第一阶段返回的 ID 批量回表；调用方负责恢复第一阶段的顺序。
+     */
+    List<TuiDynamic> selectByIds(@Param("ids") List<Long> ids);
+
     List<TuiDynamic> selectFeedByCursor(@Param("userId") Long userId, @Param("cursor") Long cursor, @Param("limit") Integer limit);
 
     List<TuiDynamic> selectByUserId(@Param("userId") Long userId, @Param("cursor") Long cursor, @Param("limit") Integer limit);
@@ -32,4 +44,5 @@ public interface TuiDynamicMapper {
      * 查询指定时间前未归档的动态ID列表（用于兜底定时任务）
      */
     List<Long> selectUnarchivedBefore(@Param("beforeTime") Date beforeTime, @Param("limit") Integer limit);
+    List<Long> selectHotDynamicIds(@Param("limit") Integer limit);
 }

@@ -8,10 +8,16 @@ import org.springframework.web.bind.annotation.*;
 import vip.xiaozhao.intern.baseUtil.intf.dto.ResponseDO;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiComment;
 import vip.xiaozhao.intern.baseUtil.intf.service.CommentService;
+import vip.xiaozhao.intern.baseUtil.service.ApiIdempotencyService;
 import vip.xiaozhao.intern.baseUtil.service.RateLimiterService;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import vip.xiaozhao.intern.baseUtil.intf.validation.XssSafe;
 import java.util.List;
 
 @Tag(name = "评论管理")
@@ -22,10 +28,14 @@ public class CommentController extends BaseController {
 
     private final CommentService commentService;
     private final RateLimiterService rateLimiterService;
+    private final ApiIdempotencyService apiIdempotencyService;
 
-    public CommentController(CommentService commentService, RateLimiterService rateLimiterService) {
+    public CommentController(CommentService commentService,
+                             RateLimiterService rateLimiterService,
+                             ApiIdempotencyService apiIdempotencyService) {
         this.commentService = commentService;
         this.rateLimiterService = rateLimiterService;
+        this.apiIdempotencyService = apiIdempotencyService;
     }
 
     @Operation(summary = "获取评论列表", description = "获取指定动态的评论列表，采用游标分页")
@@ -42,26 +52,48 @@ public class CommentController extends BaseController {
 
     @Operation(summary = "添加评论", description = "对动态添加评论，每分钟限20次")
     @PostMapping("/add")
-    public ResponseDO addComment(@Valid @RequestBody AddCommentRequest request) {
-        if (!rateLimiterService.tryAcquireComment(request.getUserId())) {
-            return fail(429, "操作太频繁，每分钟最多评论20次");
+    public ResponseDO addComment(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody AddCommentRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
         }
-        commentService.addComment(request.getUserId(), request.getDynamicId(),
-                request.getContent(), request.getParentId(), request.getReplyUserId());
-        return success("评论成功");
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/comment/add",
+                idempotencyKey, request, () -> {
+                    if (!rateLimiterService.tryAcquireComment(currentUserId)) {
+                        return fail(429, "操作太频繁，每分钟最多评论20次");
+                    }
+                    commentService.addComment(currentUserId, request.getDynamicId(),
+                            request.getContent(), request.getParentId(), request.getReplyUserId());
+                    return success("评论成功");
+                });
     }
 
     @Operation(summary = "评论点赞", description = "对评论进行点赞")
     @PostMapping("/like")
-    public ResponseDO likeComment(@Valid @RequestBody LikeCommentRequest request) {
-        commentService.likeComment(request.getUserId(), request.getCommentId());
-        return success("点赞成功");
+    public ResponseDO likeComment(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody LikeCommentRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/comment/like",
+                idempotencyKey, request, () -> {
+                    commentService.likeComment(currentUserId, request.getCommentId());
+                    return success("点赞成功");
+                });
     }
 
     @Operation(summary = "删除评论", description = "删除自己的评论")
     @PostMapping("/delete")
     public ResponseDO deleteComment(@Valid @RequestBody DeleteCommentRequest request) {
-        commentService.deleteComment(request.getUserId(), request.getCommentId());
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        commentService.deleteComment(currentUserId, request.getCommentId());
         return success("删除成功");
     }
 
@@ -69,8 +101,12 @@ public class CommentController extends BaseController {
 
     public static class CommentListRequest {
         @NotNull
+        @Positive
         private Long dynamicId;
+        @Positive
         private Long cursor;
+        @Min(1)
+        @Max(100)
         private Integer limit;
 
         public Long getDynamicId() { return dynamicId; }
@@ -99,16 +135,18 @@ public class CommentController extends BaseController {
 
     public static class AddCommentRequest {
         @NotNull
-        private Long userId;
-        @NotNull
+        @Positive
         private Long dynamicId;
         @NotNull
+        @NotBlank
+        @XssSafe
+        @jakarta.validation.constraints.Size(max = 500)
         private String content;
+        @Positive
         private Long parentId;
+        @Positive
         private Long replyUserId;
 
-        public Long getUserId() { return userId; }
-        public void setUserId(Long userId) { this.userId = userId; }
         public Long getDynamicId() { return dynamicId; }
         public void setDynamicId(Long dynamicId) { this.dynamicId = dynamicId; }
         public String getContent() { return content; }
@@ -121,24 +159,18 @@ public class CommentController extends BaseController {
 
     public static class LikeCommentRequest {
         @NotNull
-        private Long userId;
-        @NotNull
+        @Positive
         private Long commentId;
 
-        public Long getUserId() { return userId; }
-        public void setUserId(Long userId) { this.userId = userId; }
         public Long getCommentId() { return commentId; }
         public void setCommentId(Long commentId) { this.commentId = commentId; }
     }
 
     public static class DeleteCommentRequest {
         @NotNull
-        private Long userId;
-        @NotNull
+        @Positive
         private Long commentId;
 
-        public Long getUserId() { return userId; }
-        public void setUserId(Long userId) { this.userId = userId; }
         public Long getCommentId() { return commentId; }
         public void setCommentId(Long commentId) { this.commentId = commentId; }
     }

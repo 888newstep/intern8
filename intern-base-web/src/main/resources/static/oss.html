@@ -1,0 +1,285 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSS 文件管理</title>
+    <script src="https://unpkg.com/cos-js-sdk-v5/dist/cos-js-sdk-v5.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card h2 { font-size: 18px; margin-bottom: 15px; color: #555; }
+        label { display: block; margin-bottom: 5px; color: #666; font-size: 14px; }
+        input[type="text"], input[type="password"], input[type="file"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-bottom: 10px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin-right: 10px; margin-bottom: 10px; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .result { margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 4px; font-size: 13px; word-break: break-all; }
+        .result.success { background: #d4edda; color: #155724; }
+        .result.error { background: #f8d7da; color: #721c24; }
+        .result a { color: #007bff; text-decoration: none; }
+        .result a:hover { text-decoration: underline; }
+        .tabs { display: flex; margin-bottom: 15px; }
+        .tab { padding: 8px 16px; background: #e9ecef; cursor: pointer; border-radius: 4px 4px 0 0; margin-right: 5px; }
+        .tab.active { background: #007bff; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .preview { max-width: 100%; max-height: 300px; margin-top: 10px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OSS 文件管理</h1>
+        
+        <div class="card">
+            <h2>认证信息</h2>
+            <label>JWT Token（登录后获取）</label>
+            <input type="password" id="jwtToken" placeholder="输入你的 JWT Token">
+        </div>
+
+        <div class="card">
+            <h2>文件上传</h2>
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('client')">客户端直传（推荐）</div>
+                <div class="tab" onclick="switchTab('server')">服务端中转</div>
+            </div>
+            
+            <div id="client-tab" class="tab-content active">
+                <label>选择文件</label>
+                <input type="file" id="clientFile">
+                <button onclick="clientUpload()">上传到 COS</button>
+            </div>
+            
+            <div id="server-tab" class="tab-content">
+                <label>选择文件</label>
+                <input type="file" id="serverFile">
+                <button onclick="serverUpload()">服务端上传</button>
+            </div>
+            
+            <div id="uploadResult" class="result" style="display:none;"></div>
+        </div>
+
+        <div class="card">
+            <h2>文件管理</h2>
+            <label>文件名（如：uploads/abc.jpg）</label>
+            <input type="text" id="fileName" placeholder="输入文件名">
+            <button onclick="getAccessUrl()">获取访问链接</button>
+            <button onclick="deleteFile()">删除文件</button>
+            <div id="fileResult" class="result" style="display:none;"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080';
+        
+        function getToken() {
+            return document.getElementById('jwtToken').value.trim();
+        }
+        
+        function showResult(elementId, message, isSuccess, isHtml = false) {
+            const el = document.getElementById(elementId);
+            el.style.display = 'block';
+            el.className = 'result ' + (isSuccess ? 'success' : 'error');
+            if (isHtml) {
+                el.innerHTML = message;
+            } else {
+                el.textContent = message;
+            }
+        }
+        
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(tab + '-tab').classList.add('active');
+        }
+        
+        async function clientUpload() {
+            const file = document.getElementById('clientFile').files[0];
+            if (!file) {
+                showResult('uploadResult', '请先选择文件', false);
+                return;
+            }
+            
+            const token = getToken();
+            if (!token) {
+                showResult('uploadResult', '请输入 JWT Token', false);
+                return;
+            }
+            
+            try {
+                showResult('uploadResult', '正在获取 STS 凭证...', true);
+                
+                const res = await fetch(API_BASE + '/api/oss/getUploadToken', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify({ userId: 1 })
+                });
+                
+                const data = await res.json();
+                if (!data.success) {
+                    showResult('uploadResult', '获取凭证失败: ' + data.message, false);
+                    return;
+                }
+                
+                const credentials = data.data;
+                const cos = new COS({
+                    getAuthorization: function(options, callback) {
+                        callback({
+                            TmpSecretId: credentials.tmpSecretId,
+                            TmpSecretKey: credentials.tmpSecretKey,
+                            XCosSecurityToken: credentials.sessionToken,
+                            StartTime: credentials.startTime,
+                            ExpiredTime: credentials.expiredTime
+                        });
+                    }
+                });
+                
+                const fileName = 'uploads/' + Date.now() + '_' + file.name;
+                showResult('uploadResult', '正在上传到 COS...', true);
+                
+                cos.uploadFile({
+                    Bucket: credentials.bucket,
+                    Region: credentials.region,
+                    Key: fileName,
+                    Body: file,
+                    onProgress: function(info) {
+                        const percent = parseInt(info.percent * 100);
+                        showResult('uploadResult', '上传进度: ' + percent + '%', true);
+                    }
+                }, function(err, data) {
+                    if (err) {
+                        showResult('uploadResult', '上传失败: ' + err.message, false);
+                    } else {
+                        const url = 'https://' + credentials.bucket + '.cos.' + credentials.region + '.myqcloud.com/' + fileName;
+                        showResult('uploadResult', 
+                            '上传成功！<br>文件名: ' + fileName + '<br>访问链接: <a href="' + url + '" target="_blank">' + url + '</a>', 
+                            true, true);
+                    }
+                });
+            } catch (e) {
+                showResult('uploadResult', '上传异常: ' + e.message, false);
+            }
+        }
+        
+        async function serverUpload() {
+            const file = document.getElementById('serverFile').files[0];
+            if (!file) {
+                showResult('uploadResult', '请先选择文件', false);
+                return;
+            }
+            
+            const token = getToken();
+            if (!token) {
+                showResult('uploadResult', '请输入 JWT Token', false);
+                return;
+            }
+            
+            try {
+                showResult('uploadResult', '正在上传...', true);
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('dir', 'uploads');
+                
+                const res = await fetch(API_BASE + '/api/oss/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: formData
+                });
+                
+                const data = await res.json();
+                if (data.success) {
+                    showResult('uploadResult', 
+                        '上传成功！<br>文件名: ' + data.data.fileName + '<br>访问链接: <a href="' + data.data.url + '" target="_blank">' + data.data.url + '</a>', 
+                        true, true);
+                } else {
+                    showResult('uploadResult', '上传失败: ' + data.message, false);
+                }
+            } catch (e) {
+                showResult('uploadResult', '上传异常: ' + e.message, false);
+            }
+        }
+        
+        async function getAccessUrl() {
+            const fileName = document.getElementById('fileName').value.trim();
+            if (!fileName) {
+                showResult('fileResult', '请输入文件名', false);
+                return;
+            }
+            
+            const token = getToken();
+            if (!token) {
+                showResult('fileResult', '请输入 JWT Token', false);
+                return;
+            }
+            
+            try {
+                const res = await fetch(API_BASE + '/api/oss/access/' + encodeURIComponent(fileName), {
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    }
+                });
+                
+                const data = await res.json();
+                if (data.success) {
+                    showResult('fileResult', 
+                        '访问链接: <a href="' + data.data.url + '" target="_blank">' + data.data.url + '</a>', 
+                        true, true);
+                } else {
+                    showResult('fileResult', '获取失败: ' + data.message, false);
+                }
+            } catch (e) {
+                showResult('fileResult', '请求异常: ' + e.message, false);
+            }
+        }
+        
+        async function deleteFile() {
+            const fileName = document.getElementById('fileName').value.trim();
+            if (!fileName) {
+                showResult('fileResult', '请输入文件名', false);
+                return;
+            }
+            
+            const token = getToken();
+            if (!token) {
+                showResult('fileResult', '请输入 JWT Token', false);
+                return;
+            }
+            
+            if (!confirm('确定要删除文件 ' + fileName + ' 吗？')) {
+                return;
+            }
+            
+            try {
+                const res = await fetch(API_BASE + '/api/oss/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify({ fileName: fileName })
+                });
+                
+                const data = await res.json();
+                if (data.success) {
+                    showResult('fileResult', '删除成功', true);
+                } else {
+                    showResult('fileResult', '删除失败: ' + data.message, false);
+                }
+            } catch (e) {
+                showResult('fileResult', '请求异常: ' + e.message, false);
+            }
+        }
+    </script>
+</body>
+</html>
+

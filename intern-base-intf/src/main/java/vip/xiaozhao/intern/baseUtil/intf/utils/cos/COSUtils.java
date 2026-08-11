@@ -1,12 +1,15 @@
 package vip.xiaozhao.intern.baseUtil.intf.utils.cos;
 
-
 import com.qcloud.cos.COSClient;
 import com.qcloud.cos.ClientConfig;
 import com.qcloud.cos.auth.BasicCOSCredentials;
 import com.qcloud.cos.auth.COSCredentials;
 import com.qcloud.cos.http.HttpProtocol;
-import com.qcloud.cos.model.*;
+import com.qcloud.cos.model.CannedAccessControlList;
+import com.qcloud.cos.model.CreateBucketRequest;
+import com.qcloud.cos.model.DeleteObjectRequest;
+import com.qcloud.cos.model.GetObjectRequest;
+import com.qcloud.cos.model.PutObjectRequest;
 import com.qcloud.cos.region.Region;
 import com.tencent.cloud.CosStsClient;
 import lombok.extern.slf4j.Slf4j;
@@ -20,171 +23,170 @@ import java.net.URL;
 import java.util.Date;
 import java.util.TreeMap;
 
-/**
- * @author allen
- * 腾讯云COS服务封装
- */
+/** 腾讯云 COS 客户端封装。客户端采用延迟初始化，避免静态类加载早于 Spring 配置注入。 */
 @Slf4j
-public class COSUtils {
+public final class COSUtils {
 
-    static COSClient cosClient;//外网client
-    static COSCredentials cred;
+    private static volatile COSClient cosClient;
+    private static volatile COSCredentials credentials;
 
-    static {
-
-        cred = new BasicCOSCredentials(COSConstant.accessKeyId, COSConstant.accessKeySecret);
-        Region region = new Region("ap-shanghai");
-        ClientConfig clientConfig = new ClientConfig(region);
-        clientConfig.setHttpProtocol(HttpProtocol.https);
-
-        cosClient = new COSClient(cred, clientConfig);
+    private COSUtils() {
     }
 
     public static void ensureBucket(COSClient client, String bucketName) {
+        if (client == null || StringUtils.isBlank(bucketName)) {
+            throw new IllegalArgumentException("COS client and bucket name are required");
+        }
         if (client.doesBucketExist(bucketName)) {
             return;
         }
-        CreateBucketRequest createBucketRequest = new CreateBucketRequest(bucketName);
-        createBucketRequest.setCannedAcl(CannedAccessControlList.Private);
-        cosClient.createBucket(createBucketRequest);
+        CreateBucketRequest request = new CreateBucketRequest(bucketName);
+        request.setCannedAcl(CannedAccessControlList.Private);
+        client.createBucket(request);
     }
 
-    /**
-     * 内网上传文件到oss
-     *
-     * @param file
-     * @param bucketName
-     * @param fileName
-     * @return boolean true:上传成功  false:上传失败
-     */
+    /** 保留旧的 boolean API，调用方可以继续使用；失败详情通过异常日志记录。 */
     public static boolean uploadFile(File file, String bucketName, String fileName) {
-        if (StringUtils.isEmpty(bucketName) || StringUtils.isEmpty(fileName)) {
-            log.info("empty bucketName or fileName");
-            return false;
-        }
         try {
-            ensureBucket(cosClient, bucketName);
-            log.info("now begin upload");
-            PutObjectRequest putObjectRequest = new PutObjectRequest(bucketName, fileName, file);
-            cosClient.putObject(putObjectRequest);
-            log.info("upload end");
-        } catch (Exception e) {
-            log.error("upload Error", e);
+            uploadFileOrThrow(file, bucketName, fileName);
+            return true;
+        } catch (RuntimeException exception) {
+            log.error("COS upload failed, bucket={}, object={}", bucketName, fileName, exception);
             return false;
         }
-        return true;
     }
 
+    /** 上传失败抛出异常，供熔断器正确记录下游失败。 */
+    public static void uploadFileOrThrow(File file, String bucketName, String fileName) {
+        if (file == null || !file.isFile()) {
+            throw new IllegalArgumentException("COS upload file does not exist");
+        }
+        requireObjectPath(bucketName, fileName);
+        COSClient client = client();
+        ensureBucket(client, bucketName);
+        client.putObject(new PutObjectRequest(bucketName, fileName, file));
+    }
 
     public static String accessFile(String bucketName, String fileName) {
-        if (StringUtils.isEmpty(bucketName) || StringUtils.isEmpty(fileName)) {
-            log.info("empty bucketName or fileName");
-            return null;
-        }
-        try {
-            Date expiration = new Date(new Date().getTime() + 60 * 15 * 1000);
-            // 生成以GET方法访问的签名URL，访客可以直接通过浏览器访问相关内容。
-            URL url = cosClient.generatePresignedUrl(bucketName, fileName, expiration);
-            log.info(url.toString());
-            // 关闭OSSClient。
-            cosClient.shutdown();
-            String[] s = url.toString().split("\\?");
-            return s[1];
-        } catch (Exception e) {
-            log.error("access Error", e);
-            return null;
-        }
-
-
+        requireObjectPath(bucketName, fileName);
+        Date expiration = new Date(System.currentTimeMillis() + 15 * 60 * 1000L);
+        URL url = client().generatePresignedUrl(bucketName, fileName, expiration);
+        String query = url.getQuery();
+        return query == null ? url.toString() : query;
     }
 
-
-    /**
-     * 删除文件
-     *
-     * @param bucketName
-     * @param fileName
-     */
+    /** 保留旧的 void API，失败时抛出异常，避免控制器误返回成功。 */
     public static void deleteObject(String bucketName, String fileName) {
-        try {
-            cosClient.deleteObject(bucketName, fileName);
-        } catch (Exception e) {
-            log.error("Object delete failed", e);
-        }
-        log.info("Object delete success");
+        deleteObjectOrThrow(bucketName, fileName);
     }
 
-    /**
-     * 直接从cos读取object 到文件
-     *
-     * @param bucket
-     * @param object
-     * @param fileName 应用服务器的存储文件
-     * @return
-     */
+    public static void deleteObjectOrThrow(String bucketName, String fileName) {
+        requireObjectPath(bucketName, fileName);
+        client().deleteObject(new DeleteObjectRequest(bucketName, fileName));
+    }
+
     public static File getObject(String bucket, String object, String fileName) {
+        requireObjectPath(bucket, object);
+        if (StringUtils.isBlank(fileName)) {
+            throw new IllegalArgumentException("Local target file is required");
+        }
         File file = new File(fileName);
-        GetObjectRequest getObjectRequest = new GetObjectRequest(bucket, object);
-        cosClient.getObject(getObjectRequest, file);
+        client().getObject(new GetObjectRequest(bucket, object), file);
         return file;
     }
 
-
     public static String geneSignedUrl(String bucketName, String objectName) {
-        // 设置URL过期时间为5分钟
-        Date expiration = new Date(new Date().getTime() + 60 * 5 * 1000);
+        Date expiration = new Date(System.currentTimeMillis() + 5 * 60 * 1000L);
         return geneSignedUrl(bucketName, objectName, expiration);
-
     }
 
-
-    /**
-     * 生成Plubload直接上传cos的参数信息
-     *
-     * @return
-     */
     public static JSONObject genCOSPlubParams() throws IOException {
-        TreeMap<String, Object> config = new TreeMap<String, Object>();
-
+        requireCredentials();
+        TreeMap<String, Object> config = new TreeMap<>();
         config.put("secretId", COSConstant.accessKeyId);
         config.put("secretKey", COSConstant.accessKeySecret);
-        // 临时密钥有效时长，单位是秒，默认 1800 秒，目前主账号最长 2 小时（即 7200 秒），子账号最长 36 小时（即 129600）秒
         config.put("durationSeconds", 600);
-        // 换成您的 bucket
         config.put("bucket", COSConstant.mainBucket);
-        // 换成 bucket 所在地区
-        config.put("region", "ap-shanghai");
-        config.put("allowPrefix", "*");
-        // 密钥的权限列表。必须在这里指定本次临时密钥所需要的权限。
-        // 简单上传、表单上传和分块上传需要以下的权限，其他权限列表请看 https://cloud.tencent.com/document/product/436/31923
-        String[] allowActions = new String[]{
-                // 简单上传
+        config.put("region", region());
+        config.put("allowPrefix", "uploads/*");
+        config.put("allowActions", new String[]{
                 "name/cos:PutObject",
-                // 表单上传、小程序上传
-                "name/cos:PostObject",
-//                // 分块上传
-//                "name/cos:InitiateMultipartUpload",
-//                "name/cos:ListMultipartUploads",
-//                "name/cos:ListParts",
-//                "name/cos:UploadPart",
-//                "name/cos:CompleteMultipartUpload"
-        };
-        config.put("allowActions", allowActions);
-
-        JSONObject credential = CosStsClient.getCredential(config);
-        log.info(credential.toString());
-       return  credential;
+                "name/cos:PostObject"
+        });
+        return CosStsClient.getCredential(config);
     }
 
     public static String geneSignedUrl(String bucketName, String objectName, Date expiration) {
-        return cosClient.generatePresignedUrl(bucketName, objectName, expiration).toString();
+        requireObjectPath(bucketName, objectName);
+        if (expiration == null || !expiration.after(new Date())) {
+            throw new IllegalArgumentException("COS URL expiration must be in the future");
+        }
+        return client().generatePresignedUrl(bucketName, objectName, expiration).toString();
     }
 
+    /** 测试和优雅停机使用，生产业务不应在单次请求中关闭共享客户端。 */
+    public static void shutdown() {
+        COSClient client = cosClient;
+        if (client != null) {
+            synchronized (COSUtils.class) {
+                client = cosClient;
+                if (client != null) {
+                    client.shutdown();
+                    cosClient = null;
+                    credentials = null;
+                }
+            }
+        }
+    }
 
+    private static COSClient client() {
+        COSClient current = cosClient;
+        if (current != null) {
+            return current;
+        }
+        synchronized (COSUtils.class) {
+            current = cosClient;
+            if (current == null) {
+                requireCredentials();
+                ClientConfig config = new ClientConfig(new Region(region()));
+                config.setHttpProtocol(HttpProtocol.https);
+                config.setConnectionTimeout(positiveOrDefault(COSConstant.connectionTimeoutMs, 5_000));
+                config.setSocketTimeout(positiveOrDefault(COSConstant.socketTimeoutMs, 10_000));
+                config.setConnectionRequestTimeout(
+                        positiveOrDefault(COSConstant.connectionRequestTimeoutMs, 3_000));
+                config.setMaxConnectionsCount(positiveOrDefault(COSConstant.maxConnections, 64));
+                config.setMaxErrorRetry(nonNegativeOrDefault(COSConstant.maxErrorRetry, 2));
+                credentials = new BasicCOSCredentials(
+                        COSConstant.accessKeyId, COSConstant.accessKeySecret);
+                current = new COSClient(credentials, config);
+                cosClient = current;
+            }
+            return current;
+        }
+    }
 
+    private static void requireObjectPath(String bucketName, String objectName) {
+        if (StringUtils.isBlank(bucketName) || StringUtils.isBlank(objectName)) {
+            throw new IllegalArgumentException("COS bucket and object name are required");
+        }
+    }
 
+    private static void requireCredentials() {
+        if (StringUtils.isBlank(COSConstant.accessKeyId)
+                || StringUtils.isBlank(COSConstant.accessKeySecret)) {
+            throw new IllegalStateException("COS credentials are not configured");
+        }
+    }
 
-    public static void main(String[] args) {
+    private static String region() {
+        return StringUtils.defaultIfBlank(COSConstant.region, "ap-guangzhou");
+    }
 
+    private static int positiveOrDefault(int value, int defaultValue) {
+        return value > 0 ? value : defaultValue;
+    }
+
+    private static int nonNegativeOrDefault(int value, int defaultValue) {
+        return value >= 0 ? value : defaultValue;
     }
 }

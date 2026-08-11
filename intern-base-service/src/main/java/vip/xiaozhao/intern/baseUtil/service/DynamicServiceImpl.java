@@ -1,54 +1,116 @@
 package vip.xiaozhao.intern.baseUtil.service;
 
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import vip.xiaozhao.intern.baseUtil.intf.entity.TuiComment;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiDynamic;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiFollow;
 import vip.xiaozhao.intern.baseUtil.intf.exception.BusinessException;
 import vip.xiaozhao.intern.baseUtil.intf.exception.ErrorCode;
+import vip.xiaozhao.intern.baseUtil.intf.mapper.TuiCommentMapper;
 import vip.xiaozhao.intern.baseUtil.intf.mapper.TuiDynamicMapper;
 import vip.xiaozhao.intern.baseUtil.intf.mapper.TuiFollowMapper;
+import vip.xiaozhao.intern.baseUtil.intf.mapper.TuiLikeMapper;
+import vip.xiaozhao.intern.baseUtil.intf.entity.TuiLike;
+import vip.xiaozhao.intern.baseUtil.config.RabbitMQConfig;
+import vip.xiaozhao.intern.baseUtil.mq.event.ArchiveDynamicEvent;
+import vip.xiaozhao.intern.baseUtil.mq.event.BaseMqEvent;
+import vip.xiaozhao.intern.baseUtil.mq.event.NotificationEvent;
 import vip.xiaozhao.intern.baseUtil.intf.service.DynamicService;
 import vip.xiaozhao.intern.baseUtil.intf.service.NotificationService;
 import vip.xiaozhao.intern.baseUtil.utils.SnowflakeIdGenerator;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 public class DynamicServiceImpl implements DynamicService {
 
+    private static final String DYNAMIC_DETAIL_CACHE_PREFIX = "dynamic:detail:";
+
     private final TuiDynamicMapper dynamicMapper;
     private final TuiFollowMapper followMapper;
+    private final TuiCommentMapper commentMapper;
     private final NotificationService notificationService;
     private final DistributedLockService lockService;
     private final RabbitMQSender rabbitMQSender;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
+    private final RedisCacheService redisCacheService;
+    private final TuiLikeMapper likeMapper;
+    private final Timer feedQueryTimer;
+    private final MqOutboxService mqOutboxService;
 
+    @Autowired
     public DynamicServiceImpl(TuiDynamicMapper dynamicMapper, TuiFollowMapper followMapper,
+                              TuiCommentMapper commentMapper,
                               NotificationService notificationService,
                               DistributedLockService lockService,
                               RabbitMQSender rabbitMQSender,
-                              SnowflakeIdGenerator snowflakeIdGenerator) {
+                              SnowflakeIdGenerator snowflakeIdGenerator,
+                              RedisCacheService redisCacheService,
+                              TuiLikeMapper likeMapper,
+                              MeterRegistry meterRegistry,
+                              MqOutboxService mqOutboxService) {
         this.dynamicMapper = dynamicMapper;
         this.followMapper = followMapper;
+        this.commentMapper = commentMapper;
         this.notificationService = notificationService;
         this.lockService = lockService;
         this.rabbitMQSender = rabbitMQSender;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
+        this.redisCacheService = redisCacheService;
+        this.likeMapper = likeMapper;
+        this.feedQueryTimer = createFeedTimer(meterRegistry);
+        this.mqOutboxService = mqOutboxService;
+    }
+
+    /**
+     * Compatibility constructor for focused unit tests that do not create an
+     * outbox dependency. Production wiring uses the constructor above.
+     */
+    public DynamicServiceImpl(TuiDynamicMapper dynamicMapper, TuiFollowMapper followMapper,
+                              TuiCommentMapper commentMapper,
+                              NotificationService notificationService,
+                              DistributedLockService lockService,
+                              RabbitMQSender rabbitMQSender,
+                              SnowflakeIdGenerator snowflakeIdGenerator,
+                              RedisCacheService redisCacheService,
+                              TuiLikeMapper likeMapper,
+                              MeterRegistry meterRegistry) {
+        this(dynamicMapper, followMapper, commentMapper, notificationService, lockService,
+                rabbitMQSender, snowflakeIdGenerator, redisCacheService, likeMapper,
+                meterRegistry, null);
+    }
+
+    private static Timer createFeedTimer(io.micrometer.core.instrument.MeterRegistry registry) {
+        try {
+            if (registry != null && registry.config() != null) {
+                return Timer.builder("feed.query.duration")
+                        .description("Time spent executing feed query")
+                        .publishPercentileHistogram()
+                        .register(registry);
+            }
+        } catch (Exception ignored) {
+        }
+        return Timer.builder("feed.query.duration")
+                .description("Time spent executing feed query")
+                .register(new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     @Override
-    @Transactional
+    @Transactional(timeout = 5)
     public void saveDynamic(Long userId, String content, String images) {
-        // 1. 分布式锁防止同一用户重复提交
         String lockKey = DistributedLockService.LOCK_DYNAMIC_PUBLISH + userId;
         boolean locked = lockService.executeWithLockVoid(lockKey, () -> {
-            // 2. 雪花算法生成全局唯一ID，替代自增ID
             long dynamicId = snowflakeIdGenerator.nextId();
 
             TuiDynamic dynamic = new TuiDynamic();
@@ -64,16 +126,18 @@ public class DynamicServiceImpl implements DynamicService {
             dynamic.setStatus(0);
             dynamicMapper.insert(dynamic);
 
-            // 3. 事务提交后发送延迟归档消息（7天后自动归档）
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    rabbitMQSender.sendArchiveMessage(dynamicId);
-                }
-            });
+            ArchiveDynamicEvent event = ArchiveDynamicEvent.create(dynamicId);
+            if (!enqueueOutbox(event, RabbitMQConfig.ARCHIVE_DELAY_EXCHANGE,
+                    RabbitMQConfig.ARCHIVE_DELAY_ROUTING_KEY)) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        rabbitMQSender.sendArchiveMessage(event);
+                    }
+                });
+            }
         });
 
-        // 锁冲突 ≠ 操作频繁：锁获取失败说明系统负载高，不是用户刷屏
         if (!locked) {
             throw new BusinessException(ErrorCode.LOCK_ACQUIRE_FAILED.getCode(),
                     ErrorCode.LOCK_ACQUIRE_FAILED.getMessage());
@@ -81,9 +145,9 @@ public class DynamicServiceImpl implements DynamicService {
     }
 
     @Override
-    @Cacheable(value = "dynamic", key = "#id", unless = "#result == null")
     public TuiDynamic getDynamicById(Long id) {
-        TuiDynamic dynamic = dynamicMapper.selectById(id);
+        TuiDynamic dynamic = redisCacheService.get(DYNAMIC_DETAIL_CACHE_PREFIX + id, TuiDynamic.class,
+                () -> dynamicMapper.selectById(id));
         if (dynamic == null) {
             throw new BusinessException(ErrorCode.DYNAMIC_NOT_FOUND.getCode(), ErrorCode.DYNAMIC_NOT_FOUND.getMessage());
         }
@@ -91,83 +155,137 @@ public class DynamicServiceImpl implements DynamicService {
     }
 
     @Override
+    @Transactional(readOnly = true, timeout = 5)
     public List<TuiDynamic> getFeed(Long userId, Long cursor, Integer limit) {
         Long actualCursor = cursor == null ? Long.MAX_VALUE : cursor;
-        Integer actualLimit = limit == null ? 20 : Math.min(limit, 100);
-        return dynamicMapper.selectFeedByCursor(userId, actualCursor, actualLimit);
+        Integer actualLimit = limit == null ? 20 : Math.max(1, Math.min(limit, 100));
+        return feedQueryTimer.record(() -> {
+            List<Long> dynamicIds = dynamicMapper.selectFeedDynamicIds(
+                    userId, actualCursor, actualLimit);
+            if (dynamicIds == null || dynamicIds.isEmpty()) {
+                return List.of();
+            }
+
+            List<TuiDynamic> loadedDynamics = dynamicMapper.selectByIds(dynamicIds);
+            if (loadedDynamics == null || loadedDynamics.isEmpty()) {
+                return List.of();
+            }
+
+            Map<Long, TuiDynamic> dynamicsById = new HashMap<>(loadedDynamics.size());
+            for (TuiDynamic dynamic : loadedDynamics) {
+                if (dynamic != null && dynamic.getId() != null) {
+                    dynamicsById.putIfAbsent(dynamic.getId(), dynamic);
+                }
+            }
+            return dynamicIds.stream()
+                    .map(dynamicsById::get)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+        });
     }
 
     @Override
     public List<TuiDynamic> getUserDynamics(Long userId, Long cursor, Integer limit) {
         Long actualCursor = cursor == null ? Long.MAX_VALUE : cursor;
-        Integer actualLimit = limit == null ? 20 : Math.min(limit, 100);
+        Integer actualLimit = limit == null ? 20 : Math.max(1, Math.min(limit, 100));
         return dynamicMapper.selectByUserId(userId, actualCursor, actualLimit);
     }
 
     @Override
-    @Transactional
+    @Transactional(timeout = 5)
     public void likeDynamic(Long userId, Long dynamicId) {
-        // 分布式锁：防止同一用户对同一动态重复点赞
         String lockKey = DistributedLockService.LOCK_DYNAMIC_LIKE + userId + ":" + dynamicId;
         boolean locked = lockService.executeWithLockVoid(lockKey, () -> {
             TuiDynamic dynamic = dynamicMapper.selectById(dynamicId);
             if (dynamic == null) {
                 throw new BusinessException(ErrorCode.DYNAMIC_NOT_FOUND.getCode(), ErrorCode.DYNAMIC_NOT_FOUND.getMessage());
             }
+
+            TuiLike existingLike = likeMapper.selectByUserAndTarget(userId, dynamicId, 1);
+            if (existingLike != null) {
+                throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
+            }
+
+            TuiLike like = new TuiLike();
+            like.setUserId(userId);
+            like.setTargetId(dynamicId);
+            like.setTargetType(1);
+            like.setStatus(0);
+            like.setCreateTime(new Date());
+            like.setUpdateTime(new Date());
+            try {
+                likeMapper.insert(like);
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
+            }
+
             dynamicMapper.updateLikeCount(dynamicId);
+            evictDynamicDetailAfterCommit(dynamicId);
 
             final Long targetUserId = dynamic.getUserId();
             if (!userId.equals(targetUserId)) {
-                sendNotificationAfterCommit(targetUserId, userId, 1, "点赞了你的动态", String.valueOf(dynamicId));
+                sendNotificationAfterCommit(targetUserId, userId, 1, "Liked your dynamic", String.valueOf(dynamicId));
             }
         });
 
         if (!locked) {
-            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "操作太频繁，请稍后重试");
+            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Operation too frequent, please retry later");
         }
     }
 
     @Override
-    @Transactional
+    @Transactional(timeout = 5)
     public void commentDynamic(Long userId, Long dynamicId, String content) {
-        // 分布式锁：防止同一用户对同一动态重复评论
         String lockKey = DistributedLockService.LOCK_DYNAMIC_COMMENT + userId + ":" + dynamicId;
         boolean locked = lockService.executeWithLockVoid(lockKey, () -> {
             TuiDynamic dynamic = dynamicMapper.selectById(dynamicId);
             if (dynamic == null) {
                 throw new BusinessException(ErrorCode.DYNAMIC_NOT_FOUND.getCode(), ErrorCode.DYNAMIC_NOT_FOUND.getMessage());
             }
+
             dynamicMapper.updateCommentCount(dynamicId);
+
+            TuiComment comment = new TuiComment();
+            comment.setDynamicId(dynamicId);
+            comment.setUserId(userId);
+            comment.setContent(content);
+            comment.setLikeCount(0);
+            comment.setStatus(0);
+            comment.setCreateTime(new Date());
+            comment.setUpdateTime(new Date());
+            commentMapper.insert(comment);
+
+            evictDynamicDetailAfterCommit(dynamicId);
 
             final Long targetUserId = dynamic.getUserId();
             if (!userId.equals(targetUserId)) {
-                sendNotificationAfterCommit(targetUserId, userId, 2, "评论了你的动态: " + content, String.valueOf(dynamicId));
+                sendNotificationAfterCommit(targetUserId, userId, 2, "Commented: " + content, String.valueOf(dynamicId));
             }
         });
 
         if (!locked) {
-            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "操作太频繁，请稍后重试");
+            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Operation too frequent, please retry later");
         }
     }
 
     @Override
-    @Transactional
+    @Transactional(timeout = 5)
     public void shareDynamic(Long userId, Long dynamicId) {
         TuiDynamic dynamic = dynamicMapper.selectById(dynamicId);
         if (dynamic == null) {
             throw new BusinessException(ErrorCode.DYNAMIC_NOT_FOUND.getCode(), ErrorCode.DYNAMIC_NOT_FOUND.getMessage());
         }
         dynamicMapper.updateShareCount(dynamicId);
+        evictDynamicDetailAfterCommit(dynamicId);
 
         final Long targetUserId = dynamic.getUserId();
         if (!userId.equals(targetUserId)) {
-            sendNotificationAfterCommit(targetUserId, userId, 3, "分享了你的动态", String.valueOf(dynamicId));
+            sendNotificationAfterCommit(targetUserId, userId, 3, "Shared your dynamic", String.valueOf(dynamicId));
         }
     }
 
     @Override
-    @Transactional
-    @CacheEvict(value = "dynamic", key = "#dynamicId")
+    @Transactional(timeout = 5)
     public void deleteDynamic(Long userId, Long dynamicId) {
         TuiDynamic dynamic = dynamicMapper.selectById(dynamicId);
         if (dynamic == null) {
@@ -177,16 +295,16 @@ public class DynamicServiceImpl implements DynamicService {
             throw new BusinessException(ErrorCode.DYNAMIC_NOT_OWNER.getCode(), ErrorCode.DYNAMIC_NOT_OWNER.getMessage());
         }
         dynamicMapper.deleteById(dynamicId);
+        evictDynamicDetailAfterCommit(dynamicId);
     }
 
     @Override
-    @Transactional
+    @Transactional(timeout = 5)
     public void follow(Long userId, Long followUserId) {
         if (userId.equals(followUserId)) {
             throw new BusinessException(ErrorCode.FOLLOW_SELF.getCode(), ErrorCode.FOLLOW_SELF.getMessage());
         }
 
-        // 分布式锁：防止同一用户重复关注
         String lockKey = DistributedLockService.LOCK_FOLLOW + userId + ":" + followUserId;
         boolean locked = lockService.executeWithLockVoid(lockKey, () -> {
             TuiFollow existing = followMapper.selectByUserAndFollow(userId, followUserId);
@@ -199,18 +317,22 @@ public class DynamicServiceImpl implements DynamicService {
             follow.setFollowUserId(followUserId);
             follow.setCreateTime(new Date());
             follow.setStatus(0);
-            followMapper.insert(follow);
+            try {
+                followMapper.insert(follow);
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                throw new BusinessException(ErrorCode.FOLLOW_ALREADY.getCode(), ErrorCode.FOLLOW_ALREADY.getMessage());
+            }
 
-            sendNotificationAfterCommit(followUserId, userId, 4, "关注了你", String.valueOf(userId));
+            sendNotificationAfterCommit(followUserId, userId, 4, "Followed you", String.valueOf(userId));
         });
 
         if (!locked) {
-            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "操作太频繁，请稍后重试");
+            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Operation too frequent, please retry later");
         }
     }
 
     @Override
-    @Transactional
+    @Transactional(timeout = 5)
     public void unfollow(Long userId, Long followUserId) {
         TuiFollow existing = followMapper.selectByUserAndFollow(userId, followUserId);
         if (existing == null) {
@@ -237,7 +359,27 @@ public class DynamicServiceImpl implements DynamicService {
         return count == null ? 0 : count;
     }
 
+    private void evictDynamicDetailAfterCommit(Long dynamicId) {
+        String cacheKey = DYNAMIC_DETAIL_CACHE_PREFIX + dynamicId;
+        Runnable eviction = () -> redisCacheService.evictWithDoubleDelete(cacheKey, 500);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    eviction.run();
+                }
+            });
+        } else {
+            eviction.run();
+        }
+    }
+
     private void sendNotificationAfterCommit(Long userId, Long senderId, Integer type, String content, String targetId) {
+        NotificationEvent event = NotificationEvent.create(userId, senderId, type, content, targetId);
+        if (enqueueOutbox(event, RabbitMQConfig.NOTIFICATION_EXCHANGE,
+                RabbitMQConfig.NOTIFICATION_ROUTING_KEY)) {
+            return;
+        }
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
@@ -248,5 +390,9 @@ public class DynamicServiceImpl implements DynamicService {
         } else {
             notificationService.sendNotification(userId, senderId, type, content, targetId);
         }
+    }
+
+    private boolean enqueueOutbox(BaseMqEvent event, String exchangeName, String routingKey) {
+        return mqOutboxService != null && mqOutboxService.enqueue(event, exchangeName, routingKey);
     }
 }
