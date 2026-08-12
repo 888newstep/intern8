@@ -29,7 +29,7 @@
         <gson.version>2.10.1</gson.version>
         <druid.version>1.2.22</druid.version>
         <fastjson.version>1.2.83</fastjson.version>
-        <commons-lang3.version>3.14.0</commons-lang3.version>
+        <commons-lang3.version>3.18.0</commons-lang3.version>
         <springdoc.version>2.6.0</springdoc.version>
         <jjwt.version>0.12.6</jjwt.version>
         <cos-api.version>5.6.89</cos-api.version>
