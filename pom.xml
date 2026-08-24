@@ -28,13 +28,12 @@
         <caffeine.version>3.1.8</caffeine.version>
         <gson.version>2.10.1</gson.version>
         <druid.version>1.2.22</druid.version>
-        <fastjson.version>1.2.83</fastjson.version>
-        <commons-lang3.version>3.14.0</commons-lang3.version>
+        <commons-lang3.version>3.18.0</commons-lang3.version>
         <springdoc.version>2.6.0</springdoc.version>
         <jjwt.version>0.12.6</jjwt.version>
         <cos-api.version>5.6.89</cos-api.version>
         <cos-sts.version>3.0.5</cos-sts.version>
-        <jsoup.version>1.17.2</jsoup.version>
+        <jsoup.version>1.23.1</jsoup.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <json.version>20231013</json.version>
         <testcontainers.version>1.20.3</testcontainers.version>
@@ -80,12 +79,6 @@
                 <groupId>com.google.code.gson</groupId>
                 <artifactId>gson</artifactId>
                 <version>${gson.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.alibaba</groupId>
-                <artifactId>fastjson</artifactId>
-                <version>${fastjson.version}</version>
             </dependency>
 
             <dependency>
