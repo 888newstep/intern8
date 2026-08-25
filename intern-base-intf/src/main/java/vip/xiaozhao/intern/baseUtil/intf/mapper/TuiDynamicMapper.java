@@ -22,6 +22,14 @@ public interface TuiDynamicMapper {
                                     @Param("limit") Integer limit);
 
     /**
+     * 从最近的有限候选动态中匹配关注关系，适用于关注作者活跃度较高的 Feed 请求。
+     */
+    List<Long> selectFeedDynamicIdsFast(@Param("userId") Long userId,
+                                        @Param("cursor") Long cursor,
+                                        @Param("candidateLimit") Integer candidateLimit,
+                                        @Param("limit") Integer limit);
+
+    /**
      * 根据第一阶段返回的 ID 批量回表；调用方负责恢复第一阶段的顺序。
      */
     List<TuiDynamic> selectByIds(@Param("ids") List<Long> ids);

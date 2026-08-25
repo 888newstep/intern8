@@ -55,13 +55,13 @@ public class LogAspect {
 
         MDC.put(EVENT_TYPE_KEY, "http.request");
         try {
-            LOGGER.info("request.started method={} uri={} handler={}",
+            LOGGER.debug("request.started method={} uri={} handler={}",
                     request.method(), request.uri(), handler);
 
             Object result = joinPoint.proceed();
             putResponseCode(result);
             putDuration(startedAt);
-            LOGGER.info("request.completed method={} uri={} handler={} success={}",
+            LOGGER.debug("request.completed method={} uri={} handler={} success={}",
                     request.method(), request.uri(), handler, responseSucceeded(result));
             return result;
         } catch (Throwable throwable) {

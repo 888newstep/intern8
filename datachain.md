@@ -8,7 +8,7 @@
 
 - `intern-base-web`：Web 层，包含启动类、控制器、安全配置、缓存配置、拦截器、切面。
 - `intern-base-service`：业务层，包含动态/评论/通知服务、分布式锁、限流、MQ 生产者、MQ 消费者、补偿任务。
-- `intern-base-intf`：接口/实体/Mapper 层，包含 DTO、实体类、MyBatis Mapper 接口、Mapper XML、初始化 SQL。
+- `intern-base-intf`：接口/实体/Mapper 层，包含 DTO、实体类、MyBatis Mapper 接口、Mapper XML 和 Flyway 迁移资源。
 
 ---
 
@@ -34,7 +34,7 @@
 
 ## 3. 核心表与数据对象
 
-初始化 SQL 位于 `intern-base-intf/src/main/resources/sql/init.sql`，当前核心表如下：
+数据库结构由 `intern-base-intf/src/main/resources/db/migration/V1__init.sql` 和 `V2__indexes.sql` 管理，应用启动时由 Flyway 按版本执行。当前核心表如下：
 
 ### 3.1 `tui_dynamic` 动态表
 

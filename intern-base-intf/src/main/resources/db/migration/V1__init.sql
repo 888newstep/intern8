@@ -1,4 +1,10 @@
-CREATE TABLE IF NOT EXISTS `tui_dynamic` (
+-- Canonical schema baseline for the application.
+--
+-- This migration intentionally does not use IF NOT EXISTS. A clean database
+-- must be created by Flyway, and a partially initialized database must fail
+-- loudly instead of being treated as healthy.
+
+CREATE TABLE `tui_dynamic` (
     `id` BIGINT UNSIGNED NOT NULL COMMENT '动态ID（雪花算法生成）',
     `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
     `content` TEXT COMMENT '动态内容',
@@ -15,7 +21,7 @@ CREATE TABLE IF NOT EXISTS `tui_dynamic` (
     INDEX `idx_create_time` (`create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='动态表';
 
-CREATE TABLE IF NOT EXISTS `tui_follow` (
+CREATE TABLE `tui_follow` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '关注ID',
     `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
     `follow_user_id` BIGINT UNSIGNED NOT NULL COMMENT '被关注用户ID',
@@ -27,7 +33,7 @@ CREATE TABLE IF NOT EXISTS `tui_follow` (
     INDEX `idx_user_status` (`user_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='关注关系表';
 
-CREATE TABLE IF NOT EXISTS `tui_notification` (
+CREATE TABLE `tui_notification` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '通知ID',
     `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
     `sender_id` BIGINT UNSIGNED COMMENT '发送者ID',
@@ -42,8 +48,7 @@ CREATE TABLE IF NOT EXISTS `tui_notification` (
     INDEX `idx_create_time` (`create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通知表';
 
--- ==================== 评论表 ====================
-CREATE TABLE IF NOT EXISTS `tui_comment` (
+CREATE TABLE `tui_comment` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '评论ID',
     `dynamic_id` BIGINT UNSIGNED NOT NULL COMMENT '动态ID',
     `user_id` BIGINT UNSIGNED NOT NULL COMMENT '评论用户ID',
@@ -60,8 +65,7 @@ CREATE TABLE IF NOT EXISTS `tui_comment` (
     INDEX `idx_dynamic_status` (`dynamic_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='评论表';
 
--- ==================== 点赞关系表 ====================
-CREATE TABLE IF NOT EXISTS `tui_like` (
+CREATE TABLE `tui_like` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT NOT NULL COMMENT '点赞用户ID',
     `target_id` BIGINT NOT NULL COMMENT '点赞目标ID（动态或评论）',
@@ -74,9 +78,7 @@ CREATE TABLE IF NOT EXISTS `tui_like` (
     INDEX `idx_like_lookup` (`user_id`, `target_id`, `target_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='点赞关系表';
 
--- ==================== MQ message status ====================
--- This table records publisher confirm, consumer and compensation states.
-CREATE TABLE IF NOT EXISTS `mq_message_status` (
+CREATE TABLE `mq_message_status` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `message_id` VARCHAR(64) NOT NULL UNIQUE COMMENT 'Stable message ID',
     `event_type` VARCHAR(64) NOT NULL COMMENT 'Event type',
@@ -93,10 +95,7 @@ CREATE TABLE IF NOT EXISTS `mq_message_status` (
     INDEX `idx_mq_status_retry` (`status`, `retry_count`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MQ message status';
 
--- ==================== Transactional MQ Outbox ====================
--- The business write and this row are committed in the same transaction.
--- A relay can publish the row after an application crash before publish.
-CREATE TABLE IF NOT EXISTS `mq_outbox` (
+CREATE TABLE `mq_outbox` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `event_id` VARCHAR(64) NOT NULL COMMENT 'Stable event ID',
     `event_type` VARCHAR(64) NOT NULL COMMENT 'Event type',

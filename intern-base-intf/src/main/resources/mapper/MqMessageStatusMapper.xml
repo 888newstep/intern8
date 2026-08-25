@@ -37,7 +37,7 @@
           AND retry_count &lt; #{maxRetryCount}
           AND (
               status IN (2, 4)
-              OR (status = 5 AND TIMESTAMPDIFF(SECOND, update_time, NOW()) &gt;= #{staleSeconds})
+              OR (status IN (0, 5) AND TIMESTAMPDIFF(SECOND, update_time, NOW()) &gt;= #{staleSeconds})
           )
     </update>
 
@@ -48,7 +48,7 @@
           AND message_body IS NOT NULL
           AND (
               status IN (2, 4)
-              OR (status = 5 AND TIMESTAMPDIFF(SECOND, update_time, NOW()) &gt;= #{staleSeconds})
+              OR (status IN (0, 5) AND TIMESTAMPDIFF(SECOND, update_time, NOW()) &gt;= #{staleSeconds})
           )
         ORDER BY update_time ASC
         LIMIT #{limit}

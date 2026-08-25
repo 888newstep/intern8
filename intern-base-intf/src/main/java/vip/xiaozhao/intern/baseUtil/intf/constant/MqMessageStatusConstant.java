@@ -23,7 +23,7 @@ public final class MqMessageStatusConstant {
     public static final int COMPENSATING = 5;
     /** Payload or route is invalid and requires manual DLQ handling. */
     public static final int DEAD_LETTERED = 6;
-    /** A stale compensation claim may be reclaimed after this period. */
+    /** A pending broker confirm or compensation claim may be recovered after this period. */
     public static final int COMPENSATING_STALE_SECONDS = 300;
 
     private MqMessageStatusConstant() {

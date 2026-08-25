@@ -21,10 +21,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -53,13 +55,15 @@ class FeedExplainMySqlLocalIT {
     private static final String SCHEMA_PREFIX_ENV = "MYSQL_LOCAL_IT_SCHEMA_PREFIX";
 
     private static final long FEED_USER_ID = 100L;
+    private static final long SPARSE_FEED_USER_ID = 101L;
     private static final long FEED_CURSOR = 50_001L;
+    private static final long DENSE_FEED_CURSOR = 5_001L;
     private static final int FEED_LIMIT = 20;
+    private static final int FAST_CANDIDATE_LIMIT = 60;
     private static final int FOLLOW_COUNT = 5_000;
     private static final int DYNAMIC_COUNT = 50_000;
 
-    private static final String FEED_EXPLAIN_SQL = """
-            EXPLAIN
+    private static final String FEED_SQL = """
             SELECT d.id
             FROM tui_dynamic d
             WHERE d.status = 0
@@ -75,8 +79,7 @@ class FeedExplainMySqlLocalIT {
             LIMIT 20
             """;
 
-    private static final String FEED_STRAIGHT_JOIN_EXPLAIN_SQL = """
-            EXPLAIN
+    private static final String FEED_STRAIGHT_JOIN_SQL = """
             SELECT d.id
             FROM tui_dynamic d
             STRAIGHT_JOIN tui_follow f
@@ -89,8 +92,7 @@ class FeedExplainMySqlLocalIT {
             LIMIT 20
             """;
 
-    private static final String FEED_HINTED_JOIN_EXPLAIN_SQL = """
-            EXPLAIN
+    private static final String FEED_HINTED_JOIN_SQL = """
             SELECT /*+ JOIN_ORDER(d, f) */ d.id
             FROM tui_dynamic d FORCE INDEX (idx_dynamic_status_id)
             INNER JOIN tui_follow f FORCE INDEX (idx_follow_covering)
@@ -103,6 +105,12 @@ class FeedExplainMySqlLocalIT {
             LIMIT 20
             """;
 
+    private static final String FEED_EXPLAIN_SQL = "EXPLAIN\n" + FEED_SQL;
+    private static final String FEED_STRAIGHT_JOIN_EXPLAIN_SQL =
+            "EXPLAIN\n" + FEED_STRAIGHT_JOIN_SQL;
+    private static final String FEED_HINTED_JOIN_EXPLAIN_SQL =
+            "EXPLAIN\n" + FEED_HINTED_JOIN_SQL;
+
     private static DataSource dataSource;
     private static SqlSessionFactory sqlSessionFactory;
     private static String schemaName;
@@ -110,6 +118,7 @@ class FeedExplainMySqlLocalIT {
     private static int adminPort;
     private static String adminUsername;
     private static String adminPassword;
+    private static List<ExplainRow> baselinePlan;
 
     @BeforeAll
     static void initializeSchemaAndData() throws Exception {
@@ -128,6 +137,9 @@ class FeedExplainMySqlLocalIT {
         try {
             createBaselineTables();
             seedData();
+            baselinePlan = explainFeed();
+            createOptimizationIndexes();
+            analyzeTables();
             sqlSessionFactory = createSqlSessionFactory();
         } catch (Exception exception) {
             dropSchemaQuietly();
@@ -143,12 +155,7 @@ class FeedExplainMySqlLocalIT {
 
     @Test
     void feedPlanShouldExposeOptimizationIndexesAfterIndexChange() throws Exception {
-        List<ExplainRow> before = explainFeed();
-        logPlan("before", before);
-
-        createOptimizationIndexes();
-        analyzeTables();
-
+        logPlan("before", baselinePlan);
         List<ExplainRow> after = explainFeed();
         logPlan("after", after);
         logPlan("straight-join", explainFeed(FEED_STRAIGHT_JOIN_EXPLAIN_SQL));
@@ -161,6 +168,46 @@ class FeedExplainMySqlLocalIT {
         assertTrue(after.stream().anyMatch(row -> "f".equals(row.table())
                         && containsIndex(row, "idx_follow_covering")),
                 () -> "Feed EXISTS plan did not expose idx_follow_covering: " + after);
+    }
+
+    @Test
+    void candidateQueriesShouldBeEquivalentAndMeasured() throws Exception {
+        List<Long> expected = queryIds(FEED_SQL);
+        List<Long> straightJoin = queryIds(FEED_STRAIGHT_JOIN_SQL);
+        List<Long> hintedJoin = queryIds(FEED_HINTED_JOIN_SQL);
+
+        assertEquals(expected, straightJoin, "STRAIGHT_JOIN changed Feed results");
+        assertEquals(expected, hintedJoin, "Hinted JOIN changed Feed results");
+
+        List<ExplainRow> straightPlan = explainFeed(FEED_STRAIGHT_JOIN_EXPLAIN_SQL);
+        List<ExplainRow> hintedPlan = explainFeed(FEED_HINTED_JOIN_EXPLAIN_SQL);
+        assertNoTemporaryOrFilesort("STRAIGHT_JOIN", straightPlan);
+        assertNoTemporaryOrFilesort("hinted JOIN", hintedPlan);
+
+        logAnalyze("exists", FEED_SQL);
+        logAnalyze("straight-join", FEED_STRAIGHT_JOIN_SQL);
+        logAnalyze("hinted-join", FEED_HINTED_JOIN_SQL);
+        logBenchmark(benchmark("exists", FEED_SQL));
+        logBenchmark(benchmark("straight-join", FEED_STRAIGHT_JOIN_SQL));
+        logBenchmark(benchmark("hinted-join", FEED_HINTED_JOIN_SQL));
+    }
+
+    @Test
+    void existsQueryShouldKeepSparseFollowPlanAdaptive() throws Exception {
+        String existsSql = sqlForUser(FEED_SQL, SPARSE_FEED_USER_ID);
+        String straightJoinSql = sqlForUser(FEED_STRAIGHT_JOIN_SQL, SPARSE_FEED_USER_ID);
+
+        List<Long> expected = queryIds(existsSql);
+        assertEquals(expected, queryIds(straightJoinSql),
+                "Sparse-follow STRAIGHT_JOIN changed Feed results");
+        assertEquals(FEED_LIMIT, expected.size());
+
+        List<ExplainRow> existsPlan = explainFeed("EXPLAIN\n" + existsSql);
+        assertEquals("f", existsPlan.get(0).table(),
+                () -> "Sparse-follow EXISTS should start from the selective follow set: " + existsPlan);
+        logPlan("sparse-exists", existsPlan);
+        logAnalyze("sparse-exists", existsSql);
+        logAnalyze("sparse-straight-join", straightJoinSql);
     }
 
     @Test
@@ -179,6 +226,28 @@ class FeedExplainMySqlLocalIT {
             assertTrue(dynamics.stream().allMatch(dynamic -> ids.contains(dynamic.getId())));
             assertTrue(mapper.selectByIds(List.of()).isEmpty(),
                     "Empty ID batch must not generate an invalid IN () query");
+        }
+    }
+
+    @Test
+    void productionFastMapperShouldMatchDensePageAndExposeSparseFallbackSignal() {
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            TuiDynamicMapper mapper = session.getMapper(TuiDynamicMapper.class);
+
+            List<Long> expectedDensePage = mapper.selectFeedDynamicIds(
+                    FEED_USER_ID, DENSE_FEED_CURSOR, FEED_LIMIT);
+            List<Long> fastDensePage = mapper.selectFeedDynamicIdsFast(
+                    FEED_USER_ID, DENSE_FEED_CURSOR, FAST_CANDIDATE_LIMIT, FEED_LIMIT);
+            assertEquals(FEED_LIMIT, fastDensePage.size());
+            assertEquals(expectedDensePage, fastDensePage,
+                    "Fast Feed query changed a complete dense page");
+
+            List<Long> fastSparseWindow = mapper.selectFeedDynamicIdsFast(
+                    FEED_USER_ID, FEED_CURSOR, FAST_CANDIDATE_LIMIT, FEED_LIMIT);
+            assertTrue(fastSparseWindow.size() < FEED_LIMIT,
+                    "Incomplete fast page must signal the service to use the adaptive fallback");
+            assertEquals(FEED_LIMIT,
+                    mapper.selectFeedDynamicIds(FEED_USER_ID, FEED_CURSOR, FEED_LIMIT).size());
         }
     }
 
@@ -249,11 +318,19 @@ class FeedExplainMySqlLocalIT {
             for (int i = 0; i < FOLLOW_COUNT; i++) {
                 follow.setLong(1, FEED_USER_ID);
                 follow.setLong(2, 1_000L + i);
-                follow.setInt(3, 0);
+                follow.setInt(3, i % 11 == 0 ? 1 : 0);
                 follow.addBatch();
                 if ((i + 1) % 1_000 == 0) {
                     follow.executeBatch();
                 }
+            }
+            follow.executeBatch();
+
+            for (int i = 0; i < 10; i++) {
+                follow.setLong(1, SPARSE_FEED_USER_ID);
+                follow.setLong(2, 1_000L + i);
+                follow.setInt(3, 0);
+                follow.addBatch();
             }
             follow.executeBatch();
 
@@ -295,13 +372,82 @@ class FeedExplainMySqlLocalIT {
         return rows;
     }
 
+    private static List<Long> queryIds(String sql) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            return executeIdQuery(statement);
+        }
+    }
+
+    private static String sqlForUser(String sql, long userId) {
+        return sql.replace("f.user_id = 100", "f.user_id = " + userId);
+    }
+
+    private static List<Long> executeIdQuery(PreparedStatement statement) throws SQLException {
+        List<Long> ids = new ArrayList<>();
+        try (ResultSet resultSet = statement.executeQuery()) {
+            while (resultSet.next()) {
+                ids.add(resultSet.getLong(1));
+            }
+        }
+        return ids;
+    }
+
+    private static void logAnalyze(String label, String sql) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery("EXPLAIN ANALYZE\n" + sql)) {
+            while (resultSet.next()) {
+                log.info("Feed EXPLAIN ANALYZE {}: {}", label, resultSet.getString(1));
+            }
+        }
+    }
+
+    private static BenchmarkResult benchmark(String label, String sql) throws SQLException {
+        final int warmupRounds = 10;
+        final int measuredRounds = 50;
+        List<Long> durations = new ArrayList<>(measuredRounds);
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (int i = 0; i < warmupRounds; i++) {
+                executeIdQuery(statement);
+            }
+            for (int i = 0; i < measuredRounds; i++) {
+                long startedAt = System.nanoTime();
+                executeIdQuery(statement);
+                durations.add(System.nanoTime() - startedAt);
+            }
+        }
+        Collections.sort(durations);
+        return new BenchmarkResult(
+                label,
+                nanosToMillis(durations.get(measuredRounds / 2)),
+                nanosToMillis(durations.get((int) Math.ceil(measuredRounds * 0.95) - 1)));
+    }
+
+    private static double nanosToMillis(long nanos) {
+        return nanos / 1_000_000.0;
+    }
+
+    private static void assertNoTemporaryOrFilesort(String label, List<ExplainRow> rows) {
+        assertTrue(rows.stream().noneMatch(row -> row.extra() != null
+                        && (row.extra().contains("Using temporary")
+                        || row.extra().contains("Using filesort"))),
+                () -> label + " unexpectedly uses a temporary table or filesort: " + rows);
+    }
+
+    private static void logBenchmark(BenchmarkResult result) {
+        log.info("Feed benchmark {}: p50={} ms, p95={} ms",
+                result.label(), result.p50Millis(), result.p95Millis());
+    }
+
     private static void createOptimizationIndexes() throws SQLException {
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate(
                     "CREATE INDEX idx_follow_covering ON tui_follow (user_id, status, follow_user_id)");
             statement.executeUpdate(
-                    "CREATE INDEX idx_dynamic_status_id ON tui_dynamic (status, id DESC)");
+                    "CREATE INDEX idx_dynamic_status_id ON tui_dynamic (status, id DESC, user_id)");
         }
     }
 
@@ -443,5 +589,8 @@ class FeedExplainMySqlLocalIT {
             String key,
             long rows,
             String extra) {
+    }
+
+    private record BenchmarkResult(String label, double p50Millis, double p95Millis) {
     }
 }

@@ -205,10 +205,7 @@ public class RedisCacheService {
         // L2: Redis
         CacheLookup<T> redisLookup = readRedisValue(key, type);
         if (redisLookup.hit()) {
-            redisHitCount.increment();
-            redisHitCounter.increment();
-            localCache.put(key, redisLookup.value() == null ? NULL_VALUE : redisLookup.value());
-            return redisLookup.value();
+            return promoteRedisHit(key, redisLookup);
         }
 
         // L3: Cache miss -> load from DB with atomic Lua lock
@@ -224,7 +221,7 @@ public class RedisCacheService {
         LockAcquireResult lockAttempt = tryAcquireLockViaLua(lockKey);
         if (lockAttempt.token() != null) {
             try {
-                return loadAndCache(key, dbLoader, expireSeconds);
+                return loadAfterAcquiringLock(key, type, dbLoader, expireSeconds);
             } finally {
                 releaseLockViaLua(lockKey, lockAttempt.token());
             }
@@ -356,10 +353,7 @@ public class RedisCacheService {
         while (System.nanoTime() < deadline) {
             CacheLookup<T> lookup = readRedisValue(key, type);
             if (lookup.hit()) {
-                redisHitCount.increment();
-                redisHitCounter.increment();
-                localCache.put(key, lookup.value() == null ? NULL_VALUE : lookup.value());
-                return lookup.value();
+                return promoteRedisHit(key, lookup);
             }
             if (!lookup.redisAvailable()) {
                 return loadWithLocalSingleFlight(key, type, dbLoader, expireSeconds);
@@ -368,7 +362,7 @@ public class RedisCacheService {
             LockAcquireResult lockAttempt = tryAcquireLockViaLua(lockKey);
             if (lockAttempt.token() != null) {
                 try {
-                    return loadAndCache(key, dbLoader, expireSeconds);
+                    return loadAfterAcquiringLock(key, type, dbLoader, expireSeconds);
                 } finally {
                     releaseLockViaLua(lockKey, lockAttempt.token());
                 }
@@ -383,6 +377,27 @@ public class RedisCacheService {
 
         logger.warn("Cache loading lease expired without a value; falling back to DB, key={}", key);
         return loadAndCache(key, dbLoader, expireSeconds);
+    }
+
+    private <T> T loadAfterAcquiringLock(String key, Class<T> type,
+                                          Supplier<T> dbLoader, long expireSeconds) {
+        LocalCacheLookup<T> localLookup = readLocalCacheValue(key, type);
+        if (localLookup.hit()) {
+            return localLookup.value();
+        }
+
+        CacheLookup<T> redisLookup = readRedisValue(key, type);
+        if (redisLookup.hit()) {
+            return promoteRedisHit(key, redisLookup);
+        }
+        return loadAndCache(key, dbLoader, expireSeconds);
+    }
+
+    private <T> T promoteRedisHit(String key, CacheLookup<T> lookup) {
+        redisHitCount.increment();
+        redisHitCounter.increment();
+        localCache.put(key, lookup.value() == null ? NULL_VALUE : lookup.value());
+        return lookup.value();
     }
 
     private void sleepBeforeRetry(int waitMs) {

@@ -7,8 +7,8 @@ public enum SmsStatusEnum {
     VerifySuccess(1, "验证成功"),
     VerifyFail(2, "验证失败");
 
-    private int id;
-    private String name;
+    private final int id;
+    private final String name;
 
 
     SmsStatusEnum(int id, String name) {
@@ -28,10 +28,6 @@ public enum SmsStatusEnum {
         return id;
     }
 
-    public void setId(int id) {
-        this.id = id;
-    }
-
     /**
      * Getter method for property <tt>name</tt>.
      *
@@ -39,19 +35,6 @@ public enum SmsStatusEnum {
      */
     public String getName() {
         return name;
-    }
-
-    /**
-     * Setter method for property <tt>name</tt>.
-     *
-     * @param name value to be assigned to property name
-     */
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public static void main(String[] args) {
-        System.out.println(getById(1).getName());
     }
 
 }

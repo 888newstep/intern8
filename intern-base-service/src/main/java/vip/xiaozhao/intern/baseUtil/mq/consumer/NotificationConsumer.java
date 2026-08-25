@@ -6,7 +6,6 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 import vip.xiaozhao.intern.baseUtil.config.RabbitMQConfig;
-import vip.xiaozhao.intern.baseUtil.intf.constant.MqMessageStatusConstant;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiNotification;
 import vip.xiaozhao.intern.baseUtil.intf.mapper.MqMessageStatusMapper;
 import vip.xiaozhao.intern.baseUtil.intf.mapper.TuiNotificationMapper;
@@ -15,71 +14,39 @@ import vip.xiaozhao.intern.baseUtil.service.RabbitMQSender;
 import vip.xiaozhao.intern.baseUtil.utils.RedisUtil;
 
 import java.util.Date;
-import java.util.Map;
 
 @Component
 public class NotificationConsumer extends AbstractMqConsumer {
 
-    private static final String IDEMPOTENT_PREFIX = "mq:idempotent:notification:";
-    private static final long IDEMPOTENT_EXPIRE = 3 * 24 * 60 * 60L;
     private static final String UNREAD_COUNT_PREFIX = "notification:unread:count:";
-    private static final String MESSAGE_TYPE = "notification";
+    private static final ConsumerDefinition DEFINITION = new ConsumerDefinition(
+            "notification",
+            "mq:idempotent:notification:",
+            3 * 24 * 60 * 60L,
+            RabbitMQConfig.NOTIFICATION_DLX_EXCHANGE,
+            RabbitMQConfig.NOTIFICATION_RETRY_ROUTING_KEY);
 
     private final TuiNotificationMapper notificationMapper;
-    private final MqMessageStatusMapper messageStatusMapper;
 
     public NotificationConsumer(TuiNotificationMapper notificationMapper,
                                 RedisUtil redisUtil,
                                 RabbitMQSender rabbitMQSender,
                                 MqMessageStatusMapper messageStatusMapper) {
-        super(redisUtil, rabbitMQSender);
+        super(redisUtil, rabbitMQSender, messageStatusMapper);
         this.notificationMapper = notificationMapper;
-        this.messageStatusMapper = messageStatusMapper;
     }
 
     @RabbitListener(queues = RabbitMQConfig.NOTIFICATION_QUEUE)
     public void handleNotificationMessage(Message amqpMessage, Channel channel) {
-        Map<String, String> previousMdc = bindMessageContext(amqpMessage);
-        String msgId = getMessageId(amqpMessage);
-        long deliveryTag = getDeliveryTag(amqpMessage);
-        NotificationEvent event = null;
+        consume(amqpMessage, channel, DEFINITION,
+                this::deserializeNotificationEvent, this::persistNotification);
+    }
 
-        try {
-            event = deserializeNotificationEvent(amqpMessage);
-            msgId = resolveEventId(event, amqpMessage);
-            if (ackIfDuplicate(channel, deliveryTag, IDEMPOTENT_PREFIX, msgId, IDEMPOTENT_EXPIRE, MESSAGE_TYPE)) {
-                return;
-            }
-
-            TuiNotification notification = buildNotification(event);
-            notificationMapper.insert(notification);
-            redisUtil.incr(UNREAD_COUNT_PREFIX + event.getUserId());
-
-            markProcessed(IDEMPOTENT_PREFIX, msgId, IDEMPOTENT_EXPIRE);
-            if (msgId != null) {
-                messageStatusMapper.transitionStatus(msgId,
-                        CONSUMER_MUTABLE_STATES,
-                        MqMessageStatusConstant.CONSUMED,
-                        null);
-            }
-            ack(channel, deliveryTag);
-            logger.info("Notification processed, msgId: {}, notificationId: {}", msgId, notification.getId());
-        } catch (Exception e) {
-            logger.error("Failed to process notification, msgId: {}, payloadBytes: {}",
-                    msgId, bodyLength(amqpMessage), e);
-            if (msgId != null) {
-                messageStatusMapper.transitionStatus(msgId,
-                        CONSUMER_MUTABLE_STATES,
-                        MqMessageStatusConstant.CONSUME_FAILED,
-                        e.getMessage());
-            }
-            handleRetryOrDlq(event, channel, amqpMessage,
-                    RabbitMQConfig.NOTIFICATION_DLX_EXCHANGE,
-                    RabbitMQConfig.NOTIFICATION_RETRY_ROUTING_KEY,
-                    MESSAGE_TYPE);
-        } finally {
-            restoreMessageContext(previousMdc);
-        }
+    private Long persistNotification(NotificationEvent event) {
+        TuiNotification notification = buildNotification(event);
+        notificationMapper.insert(notification);
+        redisUtil.incr(UNREAD_COUNT_PREFIX + event.getUserId());
+        return notification.getId();
     }
 
     private NotificationEvent deserializeNotificationEvent(Message amqpMessage) throws Exception {

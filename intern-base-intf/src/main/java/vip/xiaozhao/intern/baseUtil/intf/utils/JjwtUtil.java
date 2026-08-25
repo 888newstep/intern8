@@ -1,12 +1,11 @@
 package vip.xiaozhao.intern.baseUtil.intf.utils;
 
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.math.NumberUtils;
 import vip.xiaozhao.intern.baseUtil.intf.constant.SignKeyConstant;
 import vip.xiaozhao.intern.baseUtil.intf.utils.security.Base64;
 import vip.xiaozhao.intern.baseUtil.intf.utils.security.MD5Signature;
 
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
@@ -15,21 +14,23 @@ public class JjwtUtil {
 
 
     public static int verifyLoginToken(String token) {
-        if (StringUtils.isEmpty(token)) {
+        if (token == null || token.isEmpty()) {
             return -1;
         }
         try {
-            String decodeToken = new String(Base64.decode(token));
-            log.info("decode token =:" + decodeToken);
+            byte[] decoded = Base64.decode(token);
+            if (decoded == null) {
+                return -1;
+            }
+            String decodeToken = new String(decoded, StandardCharsets.UTF_8);
             String[] timeSplit = decodeToken.split("\\^");
-            if (timeSplit.length != 3 ||
-                    !MD5Signature.verify(timeSplit[1] + timeSplit[0], timeSplit[2], SignKeyConstant.LOGIN_TIME_KEY)) {
-                if (timeSplit.length != 3) {
-                    log.warn("user coookie value length != 3");
-                } else if (!MD5Signature.verify(timeSplit[1] + timeSplit[0],
-                        timeSplit[2], SignKeyConstant.LOGIN_TIME_KEY)) {
-                    log.warn("user coookie md5 verify error,token: " + token);
-                }
+            if (timeSplit.length != 3) {
+                log.warn("User cookie value length is not 3");
+                return -1;
+            }
+            if (!MD5Signature.verify(timeSplit[1] + timeSplit[0],
+                    timeSplit[2], SignKeyConstant.LOGIN_TIME_KEY)) {
+                log.warn("User cookie MD5 verification failed");
                 return -1;
             }
             SimpleDateFormat format = new SimpleDateFormat("yyyyMMddHHmmss");
@@ -38,30 +39,17 @@ public class JjwtUtil {
             if (date == null || ((new Date()).getTime() - date.getTime()) > 2592000000L) {
                 return 0;
             }
-            return NumberUtils.toInt(timeSplit[0]);
+            return Integer.parseInt(timeSplit[0]);
         } catch (Exception e) {
-            log.error("user cookie md5 verify error,token: " + token);
+            log.error("User cookie verification failed");
             return -1;
-        }finally {
         }
-
     }
 
     public static String getLoginToken(int userId) throws Exception {
         String date = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
         String token = userId + "^" + date + "^" + MD5Signature.sign(date + userId, SignKeyConstant.LOGIN_TIME_KEY);
-        String encodeToken = Base64.encode(token.getBytes());
-        return encodeToken;
-    }
-
-
-    public static void main(String[] args) throws Exception {
-
-        String token = getLoginToken(8263);
-        int userId = verifyLoginToken(token);
-        System.out.println(userId);
-
-
+        return Base64.encode(token.getBytes(StandardCharsets.UTF_8));
     }
 
 }

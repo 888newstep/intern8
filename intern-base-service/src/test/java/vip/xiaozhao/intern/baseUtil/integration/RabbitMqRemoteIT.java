@@ -24,7 +24,6 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -78,7 +77,7 @@ class RabbitMqRemoteIT {
         int port = parsePort(value(PORT_PROPERTY, "RABBITMQ_IT_PORT", "5672"));
         String username = requiredValue(USERNAME_PROPERTY, "RABBITMQ_IT_USERNAME");
         String password = requiredValue(PASSWORD_PROPERTY, "RABBITMQ_IT_PASSWORD");
-        String vhost = value(VHOST_PROPERTY, "RABBITMQ_IT_VHOST", "/");
+        String vhost = value(VHOST_PROPERTY, "RABBITMQ_IT_VHOST", "/intern8");
 
         connectionFactory = new CachingConnectionFactory(host, port);
         connectionFactory.setUsername(username);
@@ -212,6 +211,34 @@ class RabbitMqRemoteIT {
     }
 
     @Test
+    void messageContextHeadersShouldSurviveBrokerRoundTrip() throws Exception {
+        String messageId = "remote-context-" + UUID.randomUUID();
+        String requestId = "request-" + messageId;
+        String userId = "user-100";
+        String clientIp = "192.0.2.10";
+        CorrelationData correlationData = publishWithContext(
+                routingKey, messageId, "context-body-" + messageId, requestId, userId, clientIp);
+
+        var confirm = correlationData.getFuture().get(10, TimeUnit.SECONDS);
+        assertTrue(confirm.isAck(), () -> "Context header publish rejected: " + confirm.getReason());
+
+        Connection connection = rawConnectionFactory.newConnection();
+        Channel channel = connection.createChannel();
+        try {
+            GetResponse delivery = pollMessage(channel, queueName, Duration.ofSeconds(10));
+            assertNotNull(delivery);
+            assertEquals(messageId, delivery.getProps().getMessageId());
+            assertTrue(headerValueEquals(requestId, delivery.getProps().getHeaders().get("requestId")));
+            assertTrue(headerValueEquals(userId, delivery.getProps().getHeaders().get("userId")));
+            assertTrue(headerValueEquals(clientIp, delivery.getProps().getHeaders().get("clientIp")));
+            channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
+        } finally {
+            channel.close();
+            connection.close();
+        }
+    }
+
+    @Test
     void mandatoryReturnShouldExposeUnroutableMessage() throws Exception {
         String messageId = "remote-return-" + UUID.randomUUID();
         String unroutableKey = routingKey + ".missing";
@@ -287,6 +314,25 @@ class RabbitMqRemoteIT {
 
     private static CorrelationData publish(String route, String messageId, String body) {
         return publish(exchangeName, route, messageId, body);
+    }
+
+    private static CorrelationData publishWithContext(
+            String route, String messageId, String body,
+            String requestId, String userId, String clientIp) {
+        CorrelationData correlationData = new CorrelationData(messageId);
+        rabbitTemplate.convertAndSend(
+                exchangeName,
+                route,
+                body,
+                message -> {
+                    message.getMessageProperties().setMessageId(messageId);
+                    message.getMessageProperties().setHeader("requestId", requestId);
+                    message.getMessageProperties().setHeader("userId", userId);
+                    message.getMessageProperties().setHeader("clientIp", clientIp);
+                    return message;
+                },
+                correlationData);
+        return correlationData;
     }
 
     private static CorrelationData publish(

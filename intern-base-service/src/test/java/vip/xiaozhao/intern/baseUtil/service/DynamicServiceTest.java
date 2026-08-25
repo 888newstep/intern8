@@ -254,6 +254,48 @@ class DynamicServiceTest {
     }
 
     @Test
+    void getFeed_FullFastPathShouldSkipAdaptiveFallback() {
+        List<Long> ids = new ArrayList<>();
+        List<TuiDynamic> dynamics = new ArrayList<>();
+        for (long id = 20L; id >= 1L; id--) {
+            ids.add(id);
+            TuiDynamic dynamic = new TuiDynamic();
+            dynamic.setId(id);
+            dynamics.add(dynamic);
+        }
+        when(dynamicMapper.selectFeedDynamicIdsFast(100L, Long.MAX_VALUE, 60, 20))
+                .thenReturn(ids);
+        when(dynamicMapper.selectByIds(ids)).thenReturn(dynamics);
+
+        List<TuiDynamic> result = dynamicService.getFeed(100L, null, null);
+
+        assertEquals(ids, result.stream().map(TuiDynamic::getId).toList());
+        verify(dynamicMapper, never()).selectFeedDynamicIds(anyLong(), anyLong(), anyInt());
+    }
+
+    @Test
+    void getFeed_IncompleteFastPathShouldUseAdaptiveFallback() {
+        when(dynamicMapper.selectFeedDynamicIdsFast(100L, 50L, 9, 3))
+                .thenReturn(List.of(49L));
+        when(dynamicMapper.selectFeedDynamicIds(100L, 50L, 3))
+                .thenReturn(List.of(40L, 30L, 20L));
+        TuiDynamic first = new TuiDynamic();
+        first.setId(40L);
+        TuiDynamic second = new TuiDynamic();
+        second.setId(30L);
+        TuiDynamic third = new TuiDynamic();
+        third.setId(20L);
+        when(dynamicMapper.selectByIds(List.of(40L, 30L, 20L)))
+                .thenReturn(List.of(first, second, third));
+
+        List<TuiDynamic> result = dynamicService.getFeed(100L, 50L, 3);
+
+        assertEquals(List.of(40L, 30L, 20L),
+                result.stream().map(TuiDynamic::getId).toList());
+        verify(dynamicMapper).selectFeedDynamicIds(100L, 50L, 3);
+    }
+
+    @Test
     void getFeed_ShouldRestoreIdQueryOrderAndSkipRowsDeletedBeforeHydration() {
         TuiDynamic first = new TuiDynamic();
         first.setId(10L);

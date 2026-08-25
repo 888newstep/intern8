@@ -3,8 +3,6 @@ package vip.xiaozhao.intern.baseUtil.service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiComment;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiDynamic;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiFollow;
@@ -36,6 +34,8 @@ import java.util.stream.Collectors;
 public class DynamicServiceImpl implements DynamicService {
 
     private static final String DYNAMIC_DETAIL_CACHE_PREFIX = "dynamic:detail:";
+    private static final int FEED_CANDIDATE_MULTIPLIER = 3;
+    private static final int MAX_FEED_CANDIDATES = 300;
 
     private final TuiDynamicMapper dynamicMapper;
     private final TuiFollowMapper followMapper;
@@ -129,12 +129,7 @@ public class DynamicServiceImpl implements DynamicService {
             ArchiveDynamicEvent event = ArchiveDynamicEvent.create(dynamicId);
             if (!enqueueOutbox(event, RabbitMQConfig.ARCHIVE_DELAY_EXCHANGE,
                     RabbitMQConfig.ARCHIVE_DELAY_ROUTING_KEY)) {
-                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                    @Override
-                    public void afterCommit() {
-                        rabbitMQSender.sendArchiveMessage(event);
-                    }
-                });
+                TransactionHooks.afterCommit(() -> rabbitMQSender.sendArchiveMessage(event));
             }
         });
 
@@ -160,8 +155,16 @@ public class DynamicServiceImpl implements DynamicService {
         Long actualCursor = cursor == null ? Long.MAX_VALUE : cursor;
         Integer actualLimit = limit == null ? 20 : Math.max(1, Math.min(limit, 100));
         return feedQueryTimer.record(() -> {
-            List<Long> dynamicIds = dynamicMapper.selectFeedDynamicIds(
-                    userId, actualCursor, actualLimit);
+            int candidateLimit = Math.min(actualLimit * FEED_CANDIDATE_MULTIPLIER,
+                    MAX_FEED_CANDIDATES);
+            List<Long> dynamicIds = dynamicMapper.selectFeedDynamicIdsFast(
+                    userId, actualCursor, candidateLimit, actualLimit);
+
+            // 未拿满一页时无法证明候选窗口之外没有匹配项，回退保证稀疏关注场景正确。
+            if (dynamicIds == null || dynamicIds.size() < actualLimit) {
+                dynamicIds = dynamicMapper.selectFeedDynamicIds(
+                        userId, actualCursor, actualLimit);
+            }
             if (dynamicIds == null || dynamicIds.isEmpty()) {
                 return List.of();
             }
@@ -361,17 +364,7 @@ public class DynamicServiceImpl implements DynamicService {
 
     private void evictDynamicDetailAfterCommit(Long dynamicId) {
         String cacheKey = DYNAMIC_DETAIL_CACHE_PREFIX + dynamicId;
-        Runnable eviction = () -> redisCacheService.evictWithDoubleDelete(cacheKey, 500);
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    eviction.run();
-                }
-            });
-        } else {
-            eviction.run();
-        }
+        TransactionHooks.afterCommit(() -> redisCacheService.evictWithDoubleDelete(cacheKey, 500));
     }
 
     private void sendNotificationAfterCommit(Long userId, Long senderId, Integer type, String content, String targetId) {
@@ -380,16 +373,8 @@ public class DynamicServiceImpl implements DynamicService {
                 RabbitMQConfig.NOTIFICATION_ROUTING_KEY)) {
             return;
         }
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    notificationService.sendNotification(userId, senderId, type, content, targetId);
-                }
-            });
-        } else {
-            notificationService.sendNotification(userId, senderId, type, content, targetId);
-        }
+        TransactionHooks.afterCommit(
+                () -> notificationService.sendNotification(userId, senderId, type, content, targetId));
     }
 
     private boolean enqueueOutbox(BaseMqEvent event, String exchangeName, String routingKey) {

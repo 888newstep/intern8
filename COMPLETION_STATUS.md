@@ -46,7 +46,7 @@
 - [x] 创建 tui_like 点赞关系表
 - [x] DynamicServiceImpl.likeDynamic 使用点赞关系表保证幂等
 - [x] CommentServiceImpl.likeComment 使用点赞关系表保证幂等
-- [x] 创建 unique_constraints.sql 脚本
+- [x] 将关注/点赞唯一约束纳入 Flyway V1__init.sql
 
 #### 4. 监控指标和压测基线
 - [x] 创建 PERFORMANCE_TEST_REPORT.md 压测报告模板
@@ -55,7 +55,7 @@
 ### P2 - 结果量化与工程补强（已完成 ✅）
 
 #### 1. 数据模型和索引优化
-- [x] 创建 index_optimization.sql 索引优化脚本
+- [x] 将查询路径索引纳入 Flyway V2__indexes.sql
 - [x] 创建 SLOW_QUERY_ANALYSIS.md 慢查询分析报告
 
 #### 2. 测试体系补强
@@ -77,10 +77,9 @@
 - PROJECT_SUMMARY.md - 项目总结文档
 - SLOW_QUERY_ANALYSIS.md - 慢查询分析报告
 
-### SQL 脚本
-- intern-base-intf/src/main/resources/sql/mq_message_status.sql - 消息状态表
-- intern-base-intf/src/main/resources/sql/unique_constraints.sql - 唯一约束脚本
-- intern-base-intf/src/main/resources/sql/index_optimization.sql - 索引优化脚本
+### Flyway 迁移
+- intern-base-intf/src/main/resources/db/migration/V1__init.sql - 基线表结构与唯一约束
+- intern-base-intf/src/main/resources/db/migration/V2__indexes.sql - 查询路径索引
 
 ### Java 实体和 Mapper
 - intern-base-intf/src/main/java/.../entity/MqMessageStatus.java - 消息状态实体
@@ -146,9 +145,8 @@
 mysql -u root -p
 
 # 执行脚本
-source intern-base-intf/src/main/resources/sql/mq_message_status.sql
-source intern-base-intf/src/main/resources/sql/unique_constraints.sql
-source intern-base-intf/src/main/resources/sql/index_optimization.sql
+空库不再手工执行散落 SQL，应用启动时由 Flyway 按 `V1__init.sql`、`V2__indexes.sql` 自动迁移。
+已有旧库必须先核验表和索引，再通过 Flyway Maven 插件显式执行 `baseline`，最后执行 `migrate`。
 `
 
 ### 2. 配置环境变量

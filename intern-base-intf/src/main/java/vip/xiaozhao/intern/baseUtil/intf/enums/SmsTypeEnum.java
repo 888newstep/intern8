@@ -15,9 +15,9 @@ public enum SmsTypeEnum {
      *
      */
 
-    private int id;
-    private String name;
-    private String templteId; //目前短信都调用第三方短信模板
+    private final int id;
+    private final String name;
+    private final String templteId; //目前短信都调用第三方短信模板
 
     SmsTypeEnum(int id, String name, String templteId) {
         this.id = id;
@@ -38,10 +38,6 @@ public enum SmsTypeEnum {
         return id;
     }
 
-    public void setId(int id) {
-        this.id = id;
-    }
-
     /**
      * Getter method for property <tt>name</tt>.
      *
@@ -53,23 +49,6 @@ public enum SmsTypeEnum {
 
     public String getTemplteId() {
         return templteId;
-    }
-
-    public void setTemplteId(String templteId) {
-        this.templteId = templteId;
-    }
-
-    /**
-     * Setter method for property <tt>name</tt>.
-     *
-     * @param name value to be assigned to property name
-     */
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public static void main(String[] args) {
-        System.out.println(getById(1).getName());
     }
 
 }

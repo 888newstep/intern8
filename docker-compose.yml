@@ -14,7 +14,6 @@ services:
       - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./intern-base-intf/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     networks:
       - intern-net
@@ -148,6 +147,7 @@ services:
       RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE:?RABBITMQ_ERLANG_COOKIE must be set}"
       RABBITMQ_DEFAULT_USER: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
       RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_VHOST:-/intern8}"
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -170,6 +170,7 @@ services:
       RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE:?RABBITMQ_ERLANG_COOKIE must be set}"
       RABBITMQ_DEFAULT_USER: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
       RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_VHOST:-/intern8}"
     ports:
       - "5673:5672"
       - "15673:15672"
@@ -189,6 +190,7 @@ services:
       RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE:?RABBITMQ_ERLANG_COOKIE must be set}"
       RABBITMQ_DEFAULT_USER: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
       RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_VHOST:-/intern8}"
     ports:
       - "5674:5672"
       - "15674:15672"
@@ -249,7 +251,7 @@ services:
       RABBITMQ_PORT: "5672"
       RABBITMQ_USERNAME: "${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}"
       RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}"
-      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/intern8}
     depends_on:
       mysql:
         condition: service_healthy

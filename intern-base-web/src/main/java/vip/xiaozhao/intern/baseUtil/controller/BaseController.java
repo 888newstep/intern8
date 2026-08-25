@@ -1,23 +1,11 @@
 package vip.xiaozhao.intern.baseUtil.controller;
 
-import com.google.gson.Gson;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import vip.xiaozhao.intern.baseUtil.intf.dto.ResponseDO;
 import vip.xiaozhao.intern.baseUtil.intf.exception.ErrorCode;
 
 public class BaseController {
-
-    protected static final String SUCCESS = "success";
-    protected static final String FAIL = "fail";
-    protected static final int SUCCESS_ID = 1;
-    protected static final int FAIL_ID = 0;
-    protected static final String NOT_LOGIN = "not_login";
-    protected static final Gson gson = new Gson();
-
-    @Value("${home.url}")
-    protected String PreFix;
 
     protected Long getCurrentUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();

@@ -20,12 +20,12 @@ public interface MqMessageStatusMapper {
                          @Param("toStatus") Integer toStatus,
                          @Param("lastError") String lastError);
 
-    /** Claims a failed message for one compensation worker. */
+    /** Claims a failed message or a stale pending/compensating message for one worker. */
     int claimForCompensation(@Param("messageId") String messageId,
                              @Param("maxRetryCount") Integer maxRetryCount,
                              @Param("staleSeconds") Integer staleSeconds);
 
-    /** Returns publish- or consume-failed messages eligible for compensation. */
+    /** Returns failed messages and stale pending/compensating messages eligible for recovery. */
     List<MqMessageStatus> selectCompensableMessages(@Param("maxRetryCount") Integer maxRetryCount,
                                                     @Param("staleSeconds") Integer staleSeconds,
                                                     @Param("limit") Integer limit);

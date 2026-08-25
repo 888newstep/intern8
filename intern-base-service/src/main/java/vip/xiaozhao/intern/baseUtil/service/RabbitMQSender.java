@@ -6,10 +6,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import vip.xiaozhao.intern.baseUtil.config.RabbitMQConfig;
 import vip.xiaozhao.intern.baseUtil.intf.constant.MqMessageStatusConstant;
@@ -22,6 +24,11 @@ import vip.xiaozhao.intern.baseUtil.mq.event.NotificationEvent;
 
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 @Service
 public class RabbitMQSender {
@@ -31,27 +38,59 @@ public class RabbitMQSender {
     private static final String USER_ID_HEADER = "userId";
     private static final String CLIENT_IP_HEADER = "clientIp";
     private static final int MAX_ERROR_LENGTH = 1000;
+    private static final long DEFAULT_OUTBOX_CONFIRM_TIMEOUT_MS = 5000L;
+    private static final String MQ_BREAKER_OPEN = "RabbitMQ circuit breaker is open";
+    private static final List<Integer> CONFIRMABLE_STATES = List.of(
+            MqMessageStatusConstant.PENDING, MqMessageStatusConstant.COMPENSATING);
+    private static final List<Integer> OUTBOX_CONFIRMABLE_STATES = List.of(
+            MqMessageStatusConstant.PENDING,
+            MqMessageStatusConstant.FAILED,
+            MqMessageStatusConstant.COMPENSATING);
+    private static final List<Integer> FAILURE_STATES = List.of(
+            MqMessageStatusConstant.PENDING,
+            MqMessageStatusConstant.CONFIRMED,
+            MqMessageStatusConstant.COMPENSATING);
+    private static final List<Integer> COMPENSATING_STATE = List.of(MqMessageStatusConstant.COMPENSATING);
 
     private final RabbitTemplate rabbitTemplate;
     private final MqMessageStatusMapper messageStatusMapper;
     private final ObjectMapper objectMapper;
     private final CircuitBreakerService circuitBreakerService;
+    private final long outboxConfirmTimeoutMs;
 
     @Autowired
     public RabbitMQSender(RabbitTemplate rabbitTemplate,
                           MqMessageStatusMapper messageStatusMapper,
                           ObjectMapper objectMapper,
-                          CircuitBreakerService circuitBreakerService) {
+                          CircuitBreakerService circuitBreakerService,
+                          @Value("${mq.outbox.publisher-confirm-timeout-ms:5000}") long outboxConfirmTimeoutMs) {
         this.rabbitTemplate = rabbitTemplate;
         this.messageStatusMapper = messageStatusMapper;
         this.objectMapper = objectMapper;
         this.circuitBreakerService = circuitBreakerService;
+        this.outboxConfirmTimeoutMs = Math.max(1L, outboxConfirmTimeoutMs);
+    }
+
+    public RabbitMQSender(RabbitTemplate rabbitTemplate,
+                          MqMessageStatusMapper messageStatusMapper,
+                          ObjectMapper objectMapper,
+                          CircuitBreakerService circuitBreakerService) {
+        this(rabbitTemplate, messageStatusMapper, objectMapper, circuitBreakerService,
+                DEFAULT_OUTBOX_CONFIRM_TIMEOUT_MS);
     }
 
     public RabbitMQSender(RabbitTemplate rabbitTemplate,
                           MqMessageStatusMapper messageStatusMapper,
                           ObjectMapper objectMapper) {
-        this(rabbitTemplate, messageStatusMapper, objectMapper, null);
+        this(rabbitTemplate, messageStatusMapper, objectMapper, null,
+                DEFAULT_OUTBOX_CONFIRM_TIMEOUT_MS);
+    }
+
+    public RabbitMQSender(RabbitTemplate rabbitTemplate,
+                          MqMessageStatusMapper messageStatusMapper,
+                          ObjectMapper objectMapper,
+                          long outboxConfirmTimeoutMs) {
+        this(rabbitTemplate, messageStatusMapper, objectMapper, null, outboxConfirmTimeoutMs);
     }
 
     @PostConstruct
@@ -62,10 +101,7 @@ public class RabbitMQSender {
             if (ack) {
                 logger.debug("Message confirmed successfully, msgId: {}", msgId);
                 if (correlationData != null) {
-                    transitionStatus(msgId,
-                            List.of(MqMessageStatusConstant.PENDING, MqMessageStatusConstant.COMPENSATING),
-                            MqMessageStatusConstant.CONFIRMED,
-                            null);
+                    transitionStatus(msgId, CONFIRMABLE_STATES, MqMessageStatusConstant.CONFIRMED, null);
                 }
             } else {
                 if (circuitBreakerService != null) {
@@ -135,7 +171,8 @@ public class RabbitMQSender {
         }
 
         int retryCount = outbox.getRetryCount() == null ? 0 : outbox.getRetryCount();
-        return sendEvent(outbox.getExchangeName(), outbox.getRoutingKey(), event, retryCount, outbox.getEventId());
+        return sendOutboxEvent(outbox.getExchangeName(), outbox.getRoutingKey(),
+                event, retryCount, outbox.getEventId());
     }
 
     /**
@@ -144,22 +181,30 @@ public class RabbitMQSender {
      * confirm/return callbacks still decide the persisted publish state.
      */
     public boolean sendToRetryQueue(String exchange, String routingKey, BaseMqEvent event, int retryCount) {
-        if (event == null || event.getEventId() == null || event.getEventId().isBlank()) {
-            logger.warn("Skip retry publish because event or eventId is missing");
+        return publishToRetryQueue(exchange, routingKey, event, retryCount, true);
+    }
+
+    public boolean deferToRetryQueue(String exchange, String routingKey, BaseMqEvent event, int retryCount) {
+        return publishToRetryQueue(exchange, routingKey, event, retryCount, false);
+    }
+
+    private boolean publishToRetryQueue(String exchange, String routingKey, BaseMqEvent event,
+                                        int retryCount, boolean incrementRetry) {
+        if (!hasEventId(event)) {
+            logger.warn("Skip retry queue publish because event or eventId is missing");
             return false;
         }
         boolean accepted = sendEvent(exchange, routingKey, event, retryCount, event.getEventId());
-        if (accepted) {
+        if (accepted && incrementRetry) {
             incrementRetryCount(event.getEventId());
         }
-        logger.info("Retry queue publish attempted, eventId: {}, retryCount: {}, accepted={}",
-                event.getEventId(), retryCount, accepted);
+        logger.info("Retry queue publish attempted, eventId: {}, retryCount: {}, incrementRetry={}, accepted={}",
+                event.getEventId(), retryCount, incrementRetry, accepted);
         return accepted;
     }
 
     public boolean republishFailedMessage(MqMessageStatus messageStatus) {
-        if (messageStatus == null || messageStatus.getMessageId() == null
-                || messageStatus.getMessageId().isBlank()) {
+        if (messageStatus == null || isBlank(messageStatus.getMessageId())) {
             return false;
         }
         int claimed = claimForCompensation(messageStatus.getMessageId());
@@ -187,7 +232,7 @@ public class RabbitMQSender {
 
         int currentRetryCount = messageStatus.getRetryCount() == null ? 0 : messageStatus.getRetryCount();
         int nextRetryCount = currentRetryCount + 1;
-        boolean accepted = sendEvent(route.exchange, route.routingKey, event, nextRetryCount,
+        boolean accepted = sendEvent(route.exchange(), route.routingKey(), event, nextRetryCount,
                 messageStatus.getMessageId());
         if (!accepted) {
             markCompensationFailed(messageStatus.getMessageId(), "Retry publish was rejected locally");
@@ -199,7 +244,7 @@ public class RabbitMQSender {
     }
 
     private boolean persistInitialMessage(BaseMqEvent event) {
-        if (event == null || event.getEventId() == null || event.getEventId().isBlank()) {
+        if (!hasEventId(event)) {
             logger.warn("Cannot persist MQ status because event or eventId is missing");
             return false;
         }
@@ -226,57 +271,97 @@ public class RabbitMQSender {
     }
 
     private boolean sendEvent(String exchange, String routingKey, BaseMqEvent event, int retryCount, String messageId) {
-        if (circuitBreakerService == null) {
-            try {
-                publishEvent(exchange, routingKey, event, retryCount, messageId);
-                return true;
-            } catch (Exception e) {
-                markPublishFailed(messageId, e.getMessage());
-                return false;
-            }
-        }
-
-        return circuitBreakerService.executeWithMqBreaker(
-                () -> {
-                    publishEvent(exchange, routingKey, event, retryCount, messageId);
-                    return true;
-                },
-                () -> {
-                    markPublishFailed(messageId, "RabbitMQ circuit breaker is open");
-                    return false;
-                }
-        );
+        return executePublish(messageId,
+                () -> publishEvent(exchange, routingKey, event, retryCount, messageId), null);
     }
 
-    private void markPublishFailed(String messageId, Throwable cause) {
-        String error = cause == null ? "RabbitMQ publisher confirm nack" : cause.getMessage();
-        markPublishFailed(messageId, error);
+    private boolean sendOutboxEvent(String exchange, String routingKey, BaseMqEvent event,
+                                    int retryCount, String messageId) {
+        return executePublish(messageId,
+                () -> publishOutboxAndAwaitConfirm(exchange, routingKey, event, retryCount, messageId),
+                "MQ outbox publish was not broker-confirmed");
+    }
+
+    private boolean executePublish(String messageId, Runnable publish, String failureLog) {
+        AtomicReference<RuntimeException> failure = new AtomicReference<>();
+        Supplier<Boolean> attempt = () -> {
+            try {
+                publish.run();
+                return true;
+            } catch (RuntimeException exception) {
+                failure.set(exception);
+                throw exception;
+            }
+        };
+
+        if (circuitBreakerService != null) {
+            return circuitBreakerService.executeWithMqBreaker(
+                    attempt, () -> handlePublishFailure(messageId, failure.get(), failureLog));
+        }
+        try {
+            return attempt.get();
+        } catch (RuntimeException exception) {
+            return handlePublishFailure(messageId, exception, failureLog);
+        }
+    }
+
+    private boolean handlePublishFailure(String messageId, RuntimeException failure, String failureLog) {
+        markPublishFailed(messageId, failure == null ? MQ_BREAKER_OPEN : failure.getMessage());
+        if (failureLog != null) {
+            logger.error("{}, msgId: {}", failureLog, messageId, failure);
+        }
+        return false;
+    }
+
+    private void publishOutboxAndAwaitConfirm(String exchange, String routingKey, BaseMqEvent event,
+                                              int retryCount, String messageId) {
+        CorrelationData correlationData = new CorrelationData(messageId);
+        publishEvent(exchange, routingKey, event, retryCount, messageId, correlationData);
+
+        CorrelationData.Confirm confirm;
+        try {
+            confirm = correlationData.getFuture().get(outboxConfirmTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for RabbitMQ publisher confirm", exception);
+        } catch (TimeoutException exception) {
+            throw new IllegalStateException(
+                    "RabbitMQ publisher confirm timed out after " + outboxConfirmTimeoutMs + " ms", exception);
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause() == null ? exception : exception.getCause();
+            throw new IllegalStateException("RabbitMQ publisher confirm failed: " + cause.getMessage(), cause);
+        }
+
+        if (!confirm.isAck()) {
+            String reason = confirm.getReason() == null ? "unknown reason" : confirm.getReason();
+            throw new IllegalStateException("RabbitMQ publisher confirm nack: " + reason);
+        }
+
+        ReturnedMessage returned = correlationData.getReturned();
+        if (returned != null) {
+            throw new IllegalStateException("Message returned: " + returned.getReplyText());
+        }
+
+        transitionStatus(messageId, OUTBOX_CONFIRMABLE_STATES,
+                MqMessageStatusConstant.CONFIRMED, null);
     }
 
     private void markPublishFailed(String messageId, String error) {
         if (messageId == null || messageId.isBlank()) {
             return;
         }
-        transitionStatus(messageId,
-                List.of(MqMessageStatusConstant.PENDING,
-                        MqMessageStatusConstant.CONFIRMED,
-                        MqMessageStatusConstant.COMPENSATING),
-                MqMessageStatusConstant.FAILED,
-                normalizeError(error));
+        transitionStatus(messageId, FAILURE_STATES,
+                MqMessageStatusConstant.FAILED, normalizeError(error));
     }
 
     private void markCompensationFailed(String messageId, String error) {
-        transitionStatus(messageId,
-                List.of(MqMessageStatusConstant.COMPENSATING),
-                MqMessageStatusConstant.FAILED,
-                normalizeError(error));
+        transitionStatus(messageId, COMPENSATING_STATE,
+                MqMessageStatusConstant.FAILED, normalizeError(error));
     }
 
     private void markCompensationDeadLettered(String messageId, String error) {
-        transitionStatus(messageId,
-                List.of(MqMessageStatusConstant.COMPENSATING),
-                MqMessageStatusConstant.DEAD_LETTERED,
-                normalizeError(error));
+        transitionStatus(messageId, COMPENSATING_STATE,
+                MqMessageStatusConstant.DEAD_LETTERED, normalizeError(error));
     }
 
     private int claimForCompensation(String messageId) {
@@ -319,12 +404,17 @@ public class RabbitMQSender {
     }
 
     private void publishEvent(String exchange, String routingKey, BaseMqEvent event, int retryCount, String messageId) {
+        publishEvent(exchange, routingKey, event, retryCount, messageId, new CorrelationData(messageId));
+    }
+
+    private void publishEvent(String exchange, String routingKey, BaseMqEvent event, int retryCount,
+                              String messageId, CorrelationData correlationData) {
         rabbitTemplate.convertAndSend(
                 exchange,
                 routingKey,
                 event,
                 message -> applyMessageMetadata(message, event, retryCount, messageId),
-                new CorrelationData(messageId)
+                correlationData
         );
     }
 
@@ -372,6 +462,10 @@ public class RabbitMQSender {
         return value == null || value.isBlank();
     }
 
+    private boolean hasEventId(BaseMqEvent event) {
+        return event != null && !isBlank(event.getEventId());
+    }
+
     private Route resolveOriginalRoute(String eventType) {
         if (NotificationEvent.EVENT_TYPE.equals(eventType)) {
             return new Route(RabbitMQConfig.NOTIFICATION_EXCHANGE, RabbitMQConfig.NOTIFICATION_ROUTING_KEY);
@@ -382,13 +476,6 @@ public class RabbitMQSender {
         return null;
     }
 
-    private static final class Route {
-        private final String exchange;
-        private final String routingKey;
-
-        private Route(String exchange, String routingKey) {
-            this.exchange = exchange;
-            this.routingKey = routingKey;
-        }
+    private record Route(String exchange, String routingKey) {
     }
 }

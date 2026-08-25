@@ -7,10 +7,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.SqlSessionFactoryBean;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 import vip.xiaozhao.intern.baseUtil.intf.entity.MqOutbox;
 import vip.xiaozhao.intern.baseUtil.intf.mapper.MqOutboxMapper;
 
@@ -48,8 +46,8 @@ class MqOutboxMySqlIT extends AbstractMySqlContainerIT {
         configuredDataSource.setPassword(mysqlContainer.getPassword());
         dataSource = configuredDataSource;
 
+        FlywayMigrationSupport.migrate(dataSource);
         try (Connection connection = dataSource.getConnection()) {
-            ScriptUtils.executeSqlScript(connection, new ClassPathResource("sql/mq_outbox.sql"));
             try (Statement statement = connection.createStatement()) {
                 statement.executeUpdate(
                         "CREATE TABLE IF NOT EXISTS " + BUSINESS_TABLE + " ("

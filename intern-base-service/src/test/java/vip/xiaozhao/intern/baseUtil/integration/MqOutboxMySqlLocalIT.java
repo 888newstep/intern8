@@ -11,11 +11,12 @@ import org.junit.jupiter.api.Test;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
+import vip.xiaozhao.intern.baseUtil.intf.constant.MqMessageStatusConstant;
+import vip.xiaozhao.intern.baseUtil.intf.entity.MqMessageStatus;
 import vip.xiaozhao.intern.baseUtil.intf.entity.MqOutbox;
+import vip.xiaozhao.intern.baseUtil.intf.mapper.MqMessageStatusMapper;
 import vip.xiaozhao.intern.baseUtil.intf.mapper.MqOutboxMapper;
 
 import javax.sql.DataSource;
@@ -106,6 +107,7 @@ class MqOutboxMySqlLocalIT {
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DELETE FROM " + BUSINESS_TABLE);
             statement.executeUpdate("DELETE FROM mq_outbox");
+            statement.executeUpdate("DELETE FROM mq_message_status");
         }
     }
 
@@ -199,6 +201,113 @@ class MqOutboxMySqlLocalIT {
         assertNotNull(recovered.getLeaseUntil());
     }
 
+    @Test
+    void stalePendingMessageShouldBecomeClaimableForCompensation() throws Exception {
+        String messageId = messageId("stale-pending");
+        persistMessageStatus(messageId, MqMessageStatusConstant.PENDING);
+
+        try (SqlSession freshObserver = sqlSessionFactory.openSession(true)) {
+            MqMessageStatusMapper mapper = freshObserver.getMapper(MqMessageStatusMapper.class);
+            assertTrue(mapper.selectCompensableMessages(
+                            MAX_RETRY_COUNT,
+                            MqMessageStatusConstant.COMPENSATING_STALE_SECONDS,
+                            10).stream()
+                    .noneMatch(item -> messageId.equals(item.getMessageId())));
+            assertEquals(0, mapper.claimForCompensation(
+                    messageId,
+                    MAX_RETRY_COUNT,
+                    MqMessageStatusConstant.COMPENSATING_STALE_SECONDS));
+        }
+
+        backdateMessageStatus(messageId);
+
+        try (SqlSession recoveryWorker = sqlSessionFactory.openSession(false)) {
+            MqMessageStatusMapper mapper = recoveryWorker.getMapper(MqMessageStatusMapper.class);
+            assertTrue(mapper.selectCompensableMessages(
+                            MAX_RETRY_COUNT,
+                            MqMessageStatusConstant.COMPENSATING_STALE_SECONDS,
+                            10).stream()
+                    .anyMatch(item -> messageId.equals(item.getMessageId())));
+            assertEquals(1, mapper.claimForCompensation(
+                    messageId,
+                    MAX_RETRY_COUNT,
+                    MqMessageStatusConstant.COMPENSATING_STALE_SECONDS));
+            recoveryWorker.commit();
+        }
+
+        MqMessageStatus recovered = findMessageStatus(messageId);
+        assertNotNull(recovered);
+        assertEquals(MqMessageStatusConstant.COMPENSATING, recovered.getStatus());
+    }
+
+    @Test
+    void consumedMessageShouldRejectStalePublishFailureTransition() throws Exception {
+        String messageId = messageId("consumed");
+        persistMessageStatus(messageId, MqMessageStatusConstant.CONFIRMED);
+
+        try (SqlSession consumer = sqlSessionFactory.openSession(false)) {
+            MqMessageStatusMapper mapper = consumer.getMapper(MqMessageStatusMapper.class);
+            assertEquals(1, mapper.transitionStatus(
+                    messageId,
+                    List.of(MqMessageStatusConstant.CONFIRMED),
+                    MqMessageStatusConstant.CONSUMED,
+                    null));
+            consumer.commit();
+        }
+
+        try (SqlSession stalePublisherCallback = sqlSessionFactory.openSession(false)) {
+            MqMessageStatusMapper mapper = stalePublisherCallback.getMapper(MqMessageStatusMapper.class);
+            assertEquals(0, mapper.transitionStatus(
+                    messageId,
+                    List.of(MqMessageStatusConstant.PENDING,
+                            MqMessageStatusConstant.CONFIRMED,
+                            MqMessageStatusConstant.COMPENSATING),
+                    MqMessageStatusConstant.FAILED,
+                    "late publisher return"));
+            stalePublisherCallback.commit();
+        }
+
+        MqMessageStatus persisted = findMessageStatus(messageId);
+        assertNotNull(persisted);
+        assertEquals(MqMessageStatusConstant.CONSUMED, persisted.getStatus());
+        assertNull(persisted.getLastError());
+    }
+
+    @Test
+    void deadLetteredMessageShouldRejectStaleConsumerSuccessTransition() throws Exception {
+        String messageId = messageId("dead-lettered");
+        persistMessageStatus(messageId, MqMessageStatusConstant.COMPENSATING);
+
+        try (SqlSession deadLetterWorker = sqlSessionFactory.openSession(false)) {
+            MqMessageStatusMapper mapper = deadLetterWorker.getMapper(MqMessageStatusMapper.class);
+            assertEquals(1, mapper.transitionStatus(
+                    messageId,
+                    List.of(MqMessageStatusConstant.COMPENSATING),
+                    MqMessageStatusConstant.DEAD_LETTERED,
+                    "invalid payload"));
+            deadLetterWorker.commit();
+        }
+
+        try (SqlSession staleConsumerCallback = sqlSessionFactory.openSession(false)) {
+            MqMessageStatusMapper mapper = staleConsumerCallback.getMapper(MqMessageStatusMapper.class);
+            assertEquals(0, mapper.transitionStatus(
+                    messageId,
+                    List.of(MqMessageStatusConstant.PENDING,
+                            MqMessageStatusConstant.CONFIRMED,
+                            MqMessageStatusConstant.FAILED,
+                            MqMessageStatusConstant.CONSUME_FAILED,
+                            MqMessageStatusConstant.COMPENSATING),
+                    MqMessageStatusConstant.CONSUMED,
+                    null));
+            staleConsumerCallback.commit();
+        }
+
+        MqMessageStatus persisted = findMessageStatus(messageId);
+        assertNotNull(persisted);
+        assertEquals(MqMessageStatusConstant.DEAD_LETTERED, persisted.getStatus());
+        assertEquals("invalid payload", persisted.getLastError());
+    }
+
     private static void createSchema() throws SQLException {
         try (Connection connection = createServerDataSource().getConnection();
              Statement statement = connection.createStatement()) {
@@ -208,8 +317,8 @@ class MqOutboxMySqlLocalIT {
     }
 
     private static void initializeTables() throws SQLException {
+        FlywayMigrationSupport.migrate(dataSource);
         try (Connection connection = dataSource.getConnection()) {
-            ScriptUtils.executeSqlScript(connection, new ClassPathResource("sql/mq_outbox.sql"));
             try (Statement statement = connection.createStatement()) {
                 statement.executeUpdate(
                         "CREATE TABLE IF NOT EXISTS " + BUSINESS_TABLE + " ("
@@ -227,7 +336,7 @@ class MqOutboxMySqlLocalIT {
         // 该测试不启动 Spring 容器，显式使用 JDBC 事务工厂验证 commit/rollback 语义。
         factoryBean.setTransactionFactory(new JdbcTransactionFactory());
         factoryBean.setMapperLocations(new PathMatchingResourcePatternResolver()
-                .getResources("classpath*:mapper/MqOutboxMapper.xml"));
+                .getResources("classpath*:mapper/Mq*Mapper.xml"));
         factoryBean.afterPropertiesSet();
         return Objects.requireNonNull(
                 factoryBean.getObject(), "MyBatis SqlSessionFactory must be initialized");
@@ -338,6 +447,17 @@ class MqOutboxMySqlLocalIT {
         }
     }
 
+    private static void backdateMessageStatus(String messageId) throws SQLException {
+        int staleSeconds = MqMessageStatusConstant.COMPENSATING_STALE_SECONDS + 1;
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "UPDATE mq_message_status SET update_time = DATE_SUB(NOW(), INTERVAL "
+                             + staleSeconds + " SECOND) WHERE message_id = ?")) {
+            statement.setString(1, messageId);
+            assertEquals(1, statement.executeUpdate());
+        }
+    }
+
     private static MqOutbox outbox(String eventId) {
         MqOutbox outbox = new MqOutbox();
         outbox.setEventId(eventId);
@@ -360,6 +480,39 @@ class MqOutboxMySqlLocalIT {
             throw new IllegalStateException("Generated event ID exceeds mq_outbox.event_id limit");
         }
         return eventId;
+    }
+
+    private static void persistMessageStatus(String messageId, int status) {
+        MqMessageStatus messageStatus = new MqMessageStatus();
+        messageStatus.setMessageId(messageId);
+        messageStatus.setEventType("integration.test");
+        messageStatus.setBusinessKey(messageId);
+        messageStatus.setMessageBody("payload-" + messageId);
+        messageStatus.setStatus(status);
+        messageStatus.setRetryCount(0);
+        messageStatus.setCreateTime(new Date());
+        messageStatus.setUpdateTime(new Date());
+
+        try (SqlSession session = sqlSessionFactory.openSession(false)) {
+            session.getMapper(MqMessageStatusMapper.class).insert(messageStatus);
+            session.commit();
+        }
+    }
+
+    private static MqMessageStatus findMessageStatus(String messageId) {
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            return session.getMapper(MqMessageStatusMapper.class).selectByMessageId(messageId);
+        }
+    }
+
+    private static String messageId(String suffix) {
+        String messageId = "mq-status-local-" + suffix + "-"
+                + UUID.randomUUID().toString().replace("-", "");
+        if (messageId.length() > 64) {
+            throw new IllegalStateException(
+                    "Generated message ID exceeds mq_message_status.message_id limit");
+        }
+        return messageId;
     }
 
     private static Date dateAfterSeconds(long seconds) {

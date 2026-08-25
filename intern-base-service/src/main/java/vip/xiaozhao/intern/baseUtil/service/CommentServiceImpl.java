@@ -5,8 +5,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import vip.xiaozhao.intern.baseUtil.config.RabbitMQConfig;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiComment;
 import vip.xiaozhao.intern.baseUtil.intf.entity.TuiDynamic;
@@ -170,17 +168,7 @@ public class CommentServiceImpl implements CommentService {
 
     private void evictDynamicDetailAfterCommit(Long dynamicId) {
         String cacheKey = DYNAMIC_DETAIL_CACHE_PREFIX + dynamicId;
-        Runnable eviction = () -> redisCacheService.evictWithDoubleDelete(cacheKey, 500);
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    eviction.run();
-                }
-            });
-        } else {
-            eviction.run();
-        }
+        TransactionHooks.afterCommit(() -> redisCacheService.evictWithDoubleDelete(cacheKey, 500));
     }
 
     private void sendNotificationAfterCommit(Long userId, Long senderId, Integer type, String content, String targetId) {
@@ -189,16 +177,8 @@ public class CommentServiceImpl implements CommentService {
                 RabbitMQConfig.NOTIFICATION_ROUTING_KEY)) {
             return;
         }
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    notificationService.sendNotification(userId, senderId, type, content, targetId);
-                }
-            });
-        } else {
-            notificationService.sendNotification(userId, senderId, type, content, targetId);
-        }
+        TransactionHooks.afterCommit(
+                () -> notificationService.sendNotification(userId, senderId, type, content, targetId));
     }
 
     private boolean enqueueOutbox(BaseMqEvent event, String exchangeName, String routingKey) {

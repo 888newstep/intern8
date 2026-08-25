@@ -46,6 +46,9 @@ public class RedissonConfig {
     @Value("${redis.command-timeout-ms:${redis.timeOut:10000}}")
     private int commandTimeout;
 
+    @Value("${redis.database:4}")
+    private int redisDatabase;
+
     @Bean
     public RedissonClient redissonClient() {
         validateTimeouts();
@@ -72,6 +75,7 @@ public class RedissonConfig {
     private void configureSingle(Config config) {
         SingleServerConfig singleConfig = config.useSingleServer()
                 .setAddress("redis://" + redisIp + ":" + redisPort)
+                .setDatabase(redisDatabase)
                 .setConnectionPoolSize(64)
                 .setConnectionMinimumIdleSize(16)
                 .setConnectTimeout(connectTimeout)
@@ -84,7 +88,7 @@ public class RedissonConfig {
     private void configureSentinel(Config config) {
         SentinelServersConfig sentinelConfig = config.useSentinelServers()
                 .setMasterName(sentinelMaster)
-                .setDatabase(0)
+                .setDatabase(redisDatabase)
                 .setMasterConnectionPoolSize(64)
                 .setMasterConnectionMinimumIdleSize(16)
                 .setSlaveConnectionPoolSize(64)

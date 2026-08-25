@@ -22,14 +22,44 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RedisCacheServiceFailureIsolationTest {
 
     private static final String CACHE_KEY = "test:redis-failure-single-flight";
+
+    @Test
+    void acquiredLockShouldRecheckRedisBeforeLoadingDatabase() {
+        String cacheKey = CACHE_KEY + ":lock-recheck";
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        RedisUtil redisUtil = mock(RedisUtil.class);
+        when(redisUtil.getStrict(cacheKey))
+                .thenReturn(null, "\"concurrent-value\"");
+        when(redisUtil.evalStrict(anyString(), anyList(), anyList()))
+                .thenReturn(1L);
+
+        RedisCacheService cacheService = new RedisCacheService(
+                redisUtil,
+                new ObjectMapper(),
+                meterRegistry,
+                Caffeine.newBuilder().maximumSize(100).build());
+        AtomicInteger loaderCalls = new AtomicInteger();
+
+        String value = cacheService.get(cacheKey, String.class, () -> {
+            loaderCalls.incrementAndGet();
+            return "unexpected-loader-value";
+        }, 60L);
+
+        assertEquals("concurrent-value", value);
+        assertEquals(0, loaderCalls.get());
+        verify(redisUtil, never()).setStrict(anyString(), anyString(), anyInt());
+    }
 
     @Test
     void redisReadFailureShouldSingleFlightDatabaseLoadAndOpenBreaker() throws Exception {

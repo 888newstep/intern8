@@ -15,9 +15,9 @@
         <result property="status" column="status"/>
     </resultMap>
 
-    <insert id="insert" parameterType="vip.xiaozhao.intern.baseUtil.intf.entity.TuiDynamic" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO tui_dynamic (user_id, content, images, like_count, comment_count, share_count, create_time, update_time, status)
-        VALUES (#{userId}, #{content}, #{images}, #{likeCount}, #{commentCount}, #{shareCount}, #{createTime}, #{updateTime}, #{status})
+    <insert id="insert" parameterType="vip.xiaozhao.intern.baseUtil.intf.entity.TuiDynamic">
+        INSERT INTO tui_dynamic (id, user_id, content, images, like_count, comment_count, share_count, create_time, update_time, status)
+        VALUES (#{id}, #{userId}, #{content}, #{images}, #{likeCount}, #{commentCount}, #{shareCount}, #{createTime}, #{updateTime}, #{status})
     </insert>
 
     <select id="selectById" parameterType="java.lang.Long" resultMap="dynamicResultMap">
@@ -39,6 +39,24 @@
                 AND f.follow_user_id = d.user_id
           )
         ORDER BY d.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectFeedDynamicIdsFast" resultType="java.lang.Long" timeout="5">
+        SELECT recent.id
+        FROM (
+            SELECT d.id, d.user_id
+            FROM tui_dynamic d FORCE INDEX (idx_dynamic_status_id)
+            WHERE d.status = 0
+              AND d.id &lt; #{cursor}
+            ORDER BY d.id DESC
+            LIMIT #{candidateLimit}
+        ) recent
+        STRAIGHT_JOIN tui_follow f FORCE INDEX (idx_follow_covering)
+          ON f.follow_user_id = recent.user_id
+         AND f.user_id = #{userId}
+         AND f.status = 0
+        ORDER BY recent.id DESC
         LIMIT #{limit}
     </select>
 

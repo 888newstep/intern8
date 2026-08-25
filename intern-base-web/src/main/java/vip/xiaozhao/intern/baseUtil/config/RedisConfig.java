@@ -100,16 +100,17 @@ public class RedisConfig {
                             RScript.ReturnType.INTEGER, keysAsObjects, args.toArray());
         }
 
-        private RBucket<Object> bucket(String key) {
-            return redissonClient.getBucket(key);
+        private RBucket<String> bucket(String key) {
+            return redissonClient.getBucket(key, StringCodec.INSTANCE);
         }
 
         private RAtomicLong atomicLong(String key) {
             return redissonClient.getAtomicLong(key);
         }
 
-        private RMap<String, Object> map(String key) {
-            return redissonClient.getMap(key);
+        private RMap<String, String> map(String key) {
+            // Lua scripts also use StringCodec; hashes must use the same wire encoding.
+            return redissonClient.getMap(key, StringCodec.INSTANCE);
         }
     }
 }

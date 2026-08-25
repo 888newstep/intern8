@@ -2,6 +2,51 @@
 
 本文档说明项目的环境变量配置和部署方式。
 
+## 当前 Win11 混合拓扑快速启动
+
+当前演示环境约定如下：
+
+- Win11 本机：应用、MySQL、Redis、JMeter
+- 云服务器：RabbitMQ、Milvus
+- Milvus 当前没有接入应用业务，仅作为可选的云端连通性检查项
+
+1. 将 `.env.example` 复制为不会提交到 Git 的 `.env.local`，替换其中所有 `your_*` 占位值。
+2. 检查本地和云端端口：
+
+```powershell
+.\scripts\check-hybrid-topology.ps1 -RequireMilvus
+```
+
+3. 打包并启动应用：
+
+```powershell
+.\scripts\start-local.ps1
+```
+
+只想快速启动且暂时跳过测试时使用：
+
+```powershell
+.\scripts\start-local.ps1 -SkipTests
+```
+
+`start-cluster.bat` 面向全 Docker Compose 演示环境，不适用于上述混合拓扑。
+
+### 获取本地演示 JWT
+
+应用以 `dev` Profile 启动后，请求仅开发环境存在的登录接口：
+
+在另一个 PowerShell 窗口执行：
+
+```powershell
+.\scripts\get-dev-token.ps1 -UserId 1
+```
+
+随后可以运行只读 JMeter 场景：
+
+```powershell
+.\scripts\run-jmeter.ps1 -Scenario read -DynamicId 你的真实动态ID
+```
+
 ## 环境变量配置
 
 项目使用环境变量来管理敏感配置，避免将密钥硬编码在代码库中。Docker Compose 对密码、JWT 密钥和 RabbitMQ 集群 cookie 使用必填变量校验，未配置时会在启动前失败，不再提供弱默认口令。
@@ -37,6 +82,7 @@
 - REDIS_HOST: Redis 主机地址（默认：127.0.0.1）
 - REDIS_PORT: Redis 端口（默认：6379）
 - REDIS_AUTH: Redis 密码（本机 Redis 无认证时可为空；Compose/生产环境建议必填）
+- REDIS_DATABASE: 当前项目使用的 Redis 逻辑库（固定分配为 4）
 
 Sentinel 模式额外配置：
 - REDIS_SENTINEL_MASTER: Sentinel 主节点名称（默认：mymaster）
@@ -51,7 +97,7 @@ Cluster 模式额外配置：
 - RABBITMQ_PORT: RabbitMQ 端口（默认：5672）
 - RABBITMQ_USERNAME: RabbitMQ 用户名（必填）
 - RABBITMQ_PASSWORD: RabbitMQ 密码（必填）
-- RABBITMQ_VHOST: RabbitMQ virtual host（默认：/）
+- RABBITMQ_VHOST: RabbitMQ virtual host（默认：/intern8，与其他项目隔离）
 - RABBITMQ_ERLANG_COOKIE: Docker Compose RabbitMQ 集群 cookie（Compose 必填，云服务器现有集群无需写入本仓库）
 
 #### COS 对象存储配置
