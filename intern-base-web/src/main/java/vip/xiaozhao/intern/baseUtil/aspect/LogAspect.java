@@ -47,6 +47,17 @@ public class LogAspect {
 
     @Around("controllerPointcut()")
     public Object aroundController(ProceedingJoinPoint joinPoint) throws Throwable {
+        // INFO-level deployments do not emit successful request logs. Avoid
+        // allocating MDC maps and reflective method metadata on the hot path.
+        if (!LOGGER.isDebugEnabled()) {
+            try {
+                return joinPoint.proceed();
+            } catch (Throwable throwable) {
+                logFailure(joinPoint, throwable, true);
+                throw throwable;
+            }
+        }
+
         long startedAt = System.nanoTime();
         Map<String, String> previousMdc = MDC.getCopyOfContextMap();
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
@@ -84,6 +95,15 @@ public class LogAspect {
 
     @Around("servicePointcut()")
     public Object aroundService(ProceedingJoinPoint joinPoint) throws Throwable {
+        if (!LOGGER.isDebugEnabled()) {
+            try {
+                return joinPoint.proceed();
+            } catch (Throwable throwable) {
+                logFailure(joinPoint, throwable, false);
+                throw throwable;
+            }
+        }
+
         long startedAt = System.nanoTime();
         Map<String, String> previousMdc = MDC.getCopyOfContextMap();
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
@@ -124,6 +144,27 @@ public class LogAspect {
                 valueOrDash(request.getMethod()),
                 valueOrDash(request.getRequestURI())
         );
+    }
+
+    private void logFailure(ProceedingJoinPoint joinPoint, Throwable throwable, boolean controller) {
+        MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+        String operation = signature.getDeclaringType().getSimpleName() + "." + signature.getName();
+        String scope = controller ? "http" : "service";
+        String rateLimitKey = scope + ":" + operation + ":" + throwable.getClass().getName();
+        if (!errorLogRateLimiter.tryAcquire(rateLimitKey)) {
+            return;
+        }
+        if (controller) {
+            RequestMetadata request = currentRequest();
+            LOGGER.error("request.failed method={} uri={} handler={} exceptionType={} message={}",
+                    request.method(), request.uri(), operation,
+                    throwable.getClass().getSimpleName(),
+                    SensitiveDataSanitizer.sanitizeText(throwable.getMessage()), throwable);
+        } else {
+            LOGGER.error("service.failed operation={} exceptionType={} message={}",
+                    operation, throwable.getClass().getSimpleName(),
+                    SensitiveDataSanitizer.sanitizeText(throwable.getMessage()), throwable);
+        }
     }
 
     private void putResponseCode(Object result) {

@@ -103,7 +103,7 @@ public class NotificationController extends BaseController {
         }
 
         Long cursor = request.getCursor() == null ? Long.MAX_VALUE : request.getCursor();
-        Integer limit = request.getLimit() == null ? 20 : request.getLimit();
+        Integer limit = request.getLimit() == null ? 20 : Math.max(1, Math.min(request.getLimit(), 100));
 
         List<TuiNotification> notifications = notificationMapper.selectByUserId(currentUserId, cursor, limit);
 

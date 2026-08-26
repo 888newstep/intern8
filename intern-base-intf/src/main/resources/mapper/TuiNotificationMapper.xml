@@ -26,7 +26,7 @@
 
     <select id="selectByUserId" resultMap="notificationResultMap" timeout="5">
         SELECT id, user_id, sender_id, type, content, target_id, is_read, create_time
-        FROM tui_notification
+        FROM tui_notification FORCE INDEX (idx_notification_user_id)
         WHERE user_id = #{userId} AND id &lt; #{cursor}
         ORDER BY id DESC
         LIMIT #{limit}

@@ -33,7 +33,7 @@ class FlywayMigrationContractTest {
         Resource[] resources = new PathMatchingResourcePatternResolver()
                 .getResources("classpath*:db/migration/V*.sql");
 
-        assertEquals(2, resources.length, "V1 and V2 must be present");
+        assertEquals(3, resources.length, "V1, V2 and V3 must be present");
 
         Map<Integer, String> sqlByVersion = new HashMap<>();
         Set<String> tableNames = new HashSet<>();
@@ -59,7 +59,7 @@ class FlywayMigrationContractTest {
 
         List<Integer> versions = new ArrayList<>(sqlByVersion.keySet());
         versions.sort(Integer::compareTo);
-        assertEquals(List.of(1, 2), versions);
+        assertEquals(List.of(1, 2, 3), versions);
 
         String v1 = sqlByVersion.get(1);
         assertTrue(v1.contains("CREATE TABLE `tui_dynamic`"));
@@ -79,5 +79,9 @@ class FlywayMigrationContractTest {
         assertTrue(v2.contains("CREATE INDEX `idx_user_dynamics`"));
         assertTrue(v2.contains("CREATE INDEX `idx_notification_list`"));
         assertTrue(v2.contains("CREATE INDEX `idx_comment_list`"));
+
+        String v3 = sqlByVersion.get(3);
+        assertTrue(v3.contains("CREATE INDEX `idx_notification_user_id`"));
+        assertTrue(v3.contains("ON `tui_notification` (`user_id`, `id` DESC)"));
     }
 }

@@ -48,26 +48,36 @@ public class JwtTokenProvider {
     }
 
     public Long getUserIdFromToken(String token) {
-        Claims claims = Jwts.parser()
-                .verifyWith(secretKey)
-                .requireIssuer(issuer)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+        Claims claims = parseClaims(token);
         return Long.parseLong(claims.getSubject());
+    }
+
+    /** Parse and validate the token once for the request authentication filter. */
+    public Long getUserIdIfValid(String token) {
+        try {
+            return Long.parseLong(parseClaims(token).getSubject());
+        } catch (JwtException | IllegalArgumentException e) {
+            logger.debug("Invalid JWT token", e);
+            return null;
+        }
     }
 
     public boolean validateToken(String token) {
         try {
-            Jwts.parser()
-                    .verifyWith(secretKey)
-                    .requireIssuer(issuer)
-                    .build()
-                    .parseSignedClaims(token);
+            parseClaims(token);
             return true;
         } catch (JwtException | IllegalArgumentException e) {
             logger.error("Invalid JWT token: {}", e.getMessage());
             return false;
         }
+    }
+
+    private Claims parseClaims(String token) {
+        return Jwts.parser()
+                .verifyWith(secretKey)
+                .requireIssuer(issuer)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
     }
 }

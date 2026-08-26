@@ -36,4 +36,17 @@ class MdcFilterTest {
         assertNotNull(response.getHeader("X-Request-Id"));
         assertTrue(response.getHeader("X-Request-Id").matches("[A-Za-z0-9._:-]{1,128}"));
     }
+
+    @Test
+    void disabledRequestContextDoesNotTouchMdcOrResponseHeaders() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/test");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        FilterChain chain = (servletRequest, servletResponse) -> {
+            assertTrue(MDC.getCopyOfContextMap() == null || MDC.getCopyOfContextMap().isEmpty());
+        };
+
+        new MdcFilter(false).doFilter(request, response, chain);
+
+        assertTrue(response.getHeader("X-Request-Id") == null);
+    }
 }

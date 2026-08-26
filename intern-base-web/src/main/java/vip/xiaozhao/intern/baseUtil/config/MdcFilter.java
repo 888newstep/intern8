@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import vip.xiaozhao.intern.baseUtil.logging.SensitiveDataSanitizer;
@@ -25,6 +26,8 @@ import java.util.regex.Pattern;
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class MdcFilter extends OncePerRequestFilter {
 
+    private final boolean requestContextEnabled;
+
     private static final String REQUEST_ID_KEY = "requestId";
     private static final String USER_ID_KEY = "userId";
     private static final String CLIENT_IP_KEY = "clientIp";
@@ -34,9 +37,22 @@ public class MdcFilter extends OncePerRequestFilter {
     private static final String REQUEST_ID_HEADER = "X-Request-Id";
     private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
 
+    public MdcFilter() {
+        this(true);
+    }
+
+    public MdcFilter(@Value("${logging.request-context.enabled:true}") boolean requestContextEnabled) {
+        this.requestContextEnabled = requestContextEnabled;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
+        if (!requestContextEnabled) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         Map<String, String> previousMdc = MDC.getCopyOfContextMap();
         try {
             String requestId = resolveRequestId(request.getHeader(REQUEST_ID_HEADER));

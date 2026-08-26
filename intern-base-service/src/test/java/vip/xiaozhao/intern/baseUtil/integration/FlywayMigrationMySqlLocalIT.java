@@ -63,6 +63,7 @@ class FlywayMigrationMySqlLocalIT {
             "idx_dynamic_status_id",
             "idx_user_dynamics",
             "idx_notification_list",
+            "idx_notification_user_id",
             "idx_comment_list",
             "uk_mq_outbox_event_id");
 
@@ -102,7 +103,7 @@ class FlywayMigrationMySqlLocalIT {
 
     @Test
     void emptySchemaShouldApplyProductionMigrations() throws SQLException {
-        assertEquals(List.of("1:init:true", "2:indexes:true"), migrationHistory());
+        assertEquals(List.of("1:init:true", "2:indexes:true", "3:notification cursor index:true"), migrationHistory());
         assertEquals(EXPECTED_TABLES, tableNames());
         Set<String> actualIndexes = indexNames();
         assertTrue(actualIndexes.containsAll(EXPECTED_INDEXES),
@@ -114,7 +115,7 @@ class FlywayMigrationMySqlLocalIT {
     @Test
     void rerunningProductionMigrationsShouldBeNoOp() throws SQLException {
         FlywayMigrationSupport.migrate(dataSource);
-        assertEquals(2, migrationHistory().size());
+        assertEquals(3, migrationHistory().size());
         assertEquals(EXPECTED_TABLES, tableNames());
     }
 
