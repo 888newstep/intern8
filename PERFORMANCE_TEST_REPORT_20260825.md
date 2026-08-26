@@ -361,3 +361,113 @@ MySQL IT 同时验证：密集页快路径与原查询结果、顺序一致；�
 - 隔离 schema `intern_perf_opt_20260825_1639` 已删除。
 - Redis DB 4 的 `dynamic:detail:900001` 已定向删除并确认不存在。
 - 本轮只读复测未产生 RabbitMQ 消息，未改动 `/intern8` 业务拓扑。
+
+### 10.6 2026-08-25 隔离库四档复测
+
+本轮使用隔离 schema `intern_perf_load_20260825`，5,001 条动态、1,000 条关注和 1,000 条通知；每档持续 20 秒、5 秒爬坡，业务断言全部通过。应用使用本机 MySQL/Redis 与云端 RabbitMQ `/intern8`，不启用 Milvus。
+
+| 并发 | 接口 | Samples | Errors | RPS | Average | P95 | P99 |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 100 | Dynamic Detail | 27,006 | 0 | 2,814.0 | 15.5 ms | 63 ms | 152 ms |
+| 100 | Feed | 1,785 | 0 | 184.7 | 142.6 ms | 532 ms | 1,011 ms |
+| 100 | Notification | 1,390 | 0 | 144.1 | 122.0 ms | 482 ms | 832 ms |
+| 250 | Dynamic Detail | 152,324 | 0 | 7,760.2 | 14.3 ms | 50 ms | 135 ms |
+| 250 | Feed | 3,120 | 0 | 159.0 | 420.7 ms | 1,330 ms | 1,923 ms |
+| 250 | Notification | 2,232 | 0 | 113.8 | 391.6 ms | 1,264 ms | 1,849 ms |
+| 500 | Dynamic Detail | 132,076 | 0 | 6,747.9 | 33.1 ms | 53 ms | 76 ms |
+| 500 | Feed | 15,575 | 0 | 787.3 | 169.3 ms | 474 ms | 877 ms |
+| 500 | Notification | 11,501 | 0 | 579.3 | 152.4 ms | 462 ms | 810 ms |
+| 1,000 | Dynamic Detail | 74,762 | 0 | 3,753.7 | 116.1 ms | 188 ms | 222 ms |
+| 1,000 | Feed | 24,364 | 0 | 1,196.2 | 214.2 ms | 422 ms | 746 ms |
+| 1,000 | Notification | 18,226 | 0 | 900.1 | 190.2 ms | 403 ms | 665 ms |
+
+结果显示四档均无错误或服务崩溃；详情接口受缓存保护，吞吐保持较高。Feed/通知在 250 并发开始出现排队延迟，P95 超过既定目标，1000 并发时已进入明显拐点。原始结果目录：`target/jmeter-results/load-100`、`load-250`、`load-500`、`load-1000`。
+
+### 10.7 验收复测：放大数据与计划稳定性
+
+针对 10.6 档位间结果反常，本轮先清点 Java 进程并确认无残留应用，再使用隔离 schema `intern_perf_accept_20260825` 灌入 50,000 条动态、10,000 条关注和 10,000 条通知。Feed 查询分别连续执行 50 次 `EXPLAIN`：未加 hint 的计划签名 50/50 一致，快路径（`FORCE INDEX` + `STRAIGHT_JOIN`）计划签名同样 50/50 一致，未观察到优化器在快慢路径间切换。
+
+正式验收压测每档持续 60 秒、10 秒爬坡：
+
+| 并发 | 接口 | Samples | Errors | RPS | Average | P95 | P99 |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 100 | Dynamic Detail | 33,779 | 0 | 566.8 | 81.5 ms | 236 ms | 344 ms |
+| 100 | Feed | 13,624 | 0 | 228.4 | 121.3 ms | 298 ms | 438 ms |
+| 100 | Notification | 9,700 | 0 | 162.6 | 113.7 ms | 288 ms | 412 ms |
+| 250 | Dynamic Detail | 89,884 | 0 | 1,500.8 | 76.5 ms | 198 ms | 270 ms |
+| 250 | Feed | 36,419 | 0 | 607.7 | 113.4 ms | 257 ms | 346 ms |
+| 250 | Notification | 25,278 | 0 | 421.8 | 108.9 ms | 252 ms | 343 ms |
+
+本轮结果满足容量曲线方向：250 并发吞吐高于 100 并发，延迟略有上升，且两档均 0 错误；但 Feed/通知 仍未达到 100 并发 P95 < 60ms、250 并发 P95 < 100ms 的严格目标，因此不能宣称通过验收。原始结果目录：`target/jmeter-results/acceptance-100`、`target/jmeter-results/acceptance-250`。测试完成后应用已停止，隔离 schema 已删除。
+
+### 10.8 后续优化
+
+通知列表原查询使用 `WHERE user_id = ? AND id < ? ORDER BY id DESC`，但 V2 仅有 `(user_id, is_read, create_time)` 索引，无法直接支持游标范围和排序。本轮新增 Flyway V3 索引 `(user_id, id DESC)`，保留原索引供未读数和批量已读操作使用。迁移契约测试、空 schema MySQL IT 和完整 `mvn test` 均通过（总计 111 项测试）。
+
+### 10.9 V3 索引复测
+
+在相同的 50,000 动态、10,000 关注、10,000 通知数据规模下，V3 索引复测仍受本机 JMeter 与应用/数据库共享 CPU、连接池竞争影响，不能单独归因于索引收益：
+
+| 并发 | 接口 | Samples | Errors | RPS | Average | P95 |
+|---:|---|---:|---:|---:|---:|---:|
+| 100 | Feed | 14,114 | 0 | 235.5 | 117.1 ms | 361 ms |
+| 100 | Notification | 11,203 | 0 | 187.0 | 98.5 ms | 322 ms |
+| 250 | Feed | 25,345 | 0 | 423.1 | 162.9 ms | 466 ms |
+| 250 | Notification | 17,536 | 0 | 292.8 | 157.0 ms | 459 ms |
+
+结论：V3 迁移正确、业务无错误，但本机压测没有证明端到端 P95 改善。后续应将 JMeter 移到独立机器，或单独执行数据库基准（禁用 HTTP/JMeter 竞争）来评估索引本身；在此之前不继续通过本机数据宣称容量提升。
+
+### 10.10 查询计划约束
+
+通知列表 Mapper 已显式使用 `FORCE INDEX (idx_notification_user_id)`，并将分页 `limit` 在 Controller 层收敛到 `1..100`，避免错误或恶意参数放大查询范围。完整 `mvn test` 通过 111 项。
+
+### 10.11 当前机固定开销优化复测
+
+为降低本机 JMeter 与应用共享 CPU 时的固定请求开销，`LogAspect` 增加 INFO 级别快速路径：成功请求不再创建反射元数据、复制 MDC 和读取 RequestContext；异常仍保留原有错误日志和限流。20 秒、5 秒爬坡的混合压测结果如下：
+
+| 并发 | 接口 | Samples | Errors | RPS | Average | P95 |
+|---:|---|---:|---:|---:|---:|---:|
+| 100 | Dynamic Detail | 69,159 | 0 | 3,473.6 | 12.6 ms | 66 ms |
+| 100 | Feed | 6,554 | 0 | 328.7 | 80.2 ms | 272 ms |
+| 100 | Notification | 4,765 | 0 | 239.0 | 73.7 ms | 270 ms |
+| 250 | Dynamic Detail | 204,477 | 0 | 10,255.1 | 10.6 ms | 42 ms |
+| 250 | Feed | 7,197 | 0 | 360.9 | 182.4 ms | 523 ms |
+| 250 | Notification | 5,216 | 0 | 261.6 | 167.9 ms | 506 ms |
+
+本轮只用于验证固定开销优化，持续时间短于正式验收；结果显示吞吐提升且无错误，但 P95 仍未达到严格验收目标。完整 `mvn test` 仍为 111 项通过。
+
+### 10.12 本机压测开关
+
+新增 `logging.request-context.enabled`（环境变量 `LOGGING_REQUEST_CONTEXT_ENABLED`）开关。默认值为 `true`，保留生产请求 ID/MDC 追踪；本机纯性能压测可设置为 `false`，跳过 UUID、MDC 和响应头处理，减少压测机与应用共享 CPU 时的固定开销。关闭该开关的结果不应与生产可观测性配置下的结果直接混合比较。
+
+### 10.13 JWT 解析去重
+
+认证过滤器原先对每个 Bearer Token 先校验一次、再解析 userId 一次。现在由 `JwtTokenProvider.getUserIdIfValid` 单次解析 Claims，同时完成签名/issuer/过期校验和 userId 提取；原有 `validateToken`、`getUserIdFromToken` API 保留兼容。完整 `mvn test` 通过 112 项。
+
+### 10.14 2026-08-25 当前机四档正式复测（最新优化版本）
+
+本轮在同一隔离库 `intern_perf_latest_20260825` 上使用 50,000 条动态、10,000 条关注、10,000 条通知，执行 `ANALYZE TABLE` 后压测。应用仅有一个 `intern-base-web` 实例（PID 29628），JMeter 使用本机 127.0.0.1，`LOGGING_REQUEST_CONTEXT_ENABLED=false`；同机其他 Java 服务未参与本项目端口链路。每档持续 60 秒、10 秒爬坡，读请求配比为详情/Feed/通知 = 50/30/20、125/75/50、250/150/100、500/300/200。
+
+| 并发档位 | 接口 | Samples | Errors | RPS | Average | P95 | P99 |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 100 | Dynamic Detail | 757,239 | 0 | 12,635.4 | 3.6 ms | 9 ms | 36 ms |
+| 100 | Feed | 19,513 | 0 | 325.7 | 84.7 ms | 302 ms | 467 ms |
+| 100 | Notification | 15,633 | 0 | 260.9 | 70.6 ms | 272 ms | 442 ms |
+| 250 | Dynamic Detail | 111,686 | 0 | 1,867.9 | 61.6 ms | 145 ms | 190 ms |
+| 250 | Feed | 40,066 | 0 | 669.4 | 103.1 ms | 216 ms | 277 ms |
+| 250 | Notification | 27,391 | 0 | 457.6 | 100.6 ms | 212 ms | 277 ms |
+| 500 | Dynamic Detail | 107,557 | 0 | 1,792.9 | 128.1 ms | 236 ms | 291 ms |
+| 500 | Feed | 41,738 | 0 | 695.1 | 198.1 ms | 349 ms | 431 ms |
+| 500 | Notification | 28,369 | 0 | 472.5 | 194.3 ms | 346 ms | 430 ms |
+| 1,000 | Dynamic Detail | 96,144 | 0 | 1,595.6 | 287.4 ms | 451 ms | 510 ms |
+| 1,000 | Feed | 43,230 | 0 | 716.7 | 383.7 ms | 568 ms | 663 ms |
+| 1,000 | Notification | 28,727 | 0 | 476.5 | 384.2 ms | 565 ms | 664 ms |
+
+结论：四档均 0 错误且应用未崩溃，吞吐随并发从 100 到 1,000 档总体上升，未复现此前 250 档吞吐塌陷或 P95 反向下降。容量拐点在 500 档后出现，1,000 档 Feed/通知 P95 约 568/565 ms。严格验收目标（100 档 P95<60 ms、250 档 P95<100 ms）仍未满足；500 档仅满足“可降级不崩”软条件。由于 JMeter 与应用/数据库共享本机 CPU，本轮结果用于当前机容量趋势和拐点判断，不等价于独立压测机的生产容量。
+
+原始 JMeter 结果目录：
+
+- `target/jmeter-results/latest-acceptance-100/read-20260825-221049793-eb4b45ae/`
+- `target/jmeter-results/latest-acceptance-250/read-20260825-221721052-79710f48/`
+- `target/jmeter-results/latest-acceptance-500/read-20260825-221911203-223f4b37/`
+- `target/jmeter-results/latest-acceptance-1000/read-20260825-222051733-9544d1d/`
