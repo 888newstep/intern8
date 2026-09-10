@@ -6,6 +6,25 @@
 
 ---
 
+## 0. 2026-09-10 修复状态
+
+本轮在不改业务数据库、不影响 Feed/缓存/MQ 主链路的前提下，完成以下高优先级加固：
+
+- 默认 Profile 从 `dev` 改为 `prod`；
+- 演示登录增加 `demo.auth.enabled` 显式开关，仅在 `dev + enabled=true` 时加载；
+- 删除默认演示密码，新增允许签发的 userId 白名单；
+- 删除默认管理员 ID，缺省状态下没有管理员；
+- Actuator 默认只暴露 health，健康详情默认不展示；
+- Swagger/OpenAPI 默认关闭，且不再匿名放行；
+- CORS 继续使用显式 Origin 白名单、关闭 credentials（已在前序安全提交完成）；
+- OSS 对象路径、STS、访问和删除均绑定 `uploads/{userId}/`（已在前序安全提交完成）；
+- 本地启动脚本要求显式配置 demo 开关、强密码和 userId 白名单；
+- 新增/更新安全回归测试：Security 8 项、DevAuth 4 项、OSS 3 项全部通过；全量 Maven 测试 0 failures / 0 errors。
+
+仍保留为后续演进项：真实用户认证体系、数据库 RBAC、登录 IP+账号双维度限流、COS 文件元数据表和 MIME/魔数深度校验。
+
+---
+
 ## 1. 总体评价
 
 项目已有较好的安全工程基础：
@@ -29,7 +48,7 @@
 
 ## 2. 风险分级
 
-### P0 / Critical：开发登录可签发任意身份 JWT
+### P0 / Critical：开发登录可签发任意身份 JWT（已修复）
 
 **静态证据**：
 
@@ -62,7 +81,7 @@ Content-Type: application/json
 
 ---
 
-### P0 / Critical：默认管理员 ID 与任意身份签发组合导致管理员冒充
+### P0 / Critical：默认管理员 ID 与任意身份签发组合导致管理员冒充（已修复）
 
 **静态证据**：
 
@@ -83,7 +102,7 @@ Content-Type: application/json
 
 ---
 
-### P1 / High：CORS 允许任意来源并携带凭据
+### P1 / High：CORS 允许任意来源并携带凭据（已在前序提交修复）
 
 **静态证据**：`SecurityConfig.java:64-67`
 
@@ -120,7 +139,7 @@ Spring 会回显请求 Origin。任意恶意站点可通过浏览器发起带凭
 
 ---
 
-### P1 / High：COS 对象缺少租户/用户级所有权隔离
+### P1 / High：COS 对象缺少租户/用户级所有权隔离（已在前序提交完成核心修复）
 
 **静态证据**：
 
@@ -145,7 +164,7 @@ Spring 会回显请求 Origin。任意恶意站点可通过浏览器发起带凭
 
 ---
 
-### P2 / Medium：Actuator 暴露范围过宽
+### P2 / Medium：Actuator 暴露范围过宽（已修复默认暴露面）
 
 **静态证据**：
 
@@ -163,7 +182,7 @@ Spring 会回显请求 Origin。任意恶意站点可通过浏览器发起带凭
 
 ---
 
-### P2 / Low：Swagger/OpenAPI 生产环境公开
+### P2 / Low：Swagger/OpenAPI 生产环境公开（已修复）
 
 `SecurityConfig.java:52` 公开 `/swagger-ui/**` 与 `/v3/api-docs/**`。
 

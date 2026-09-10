@@ -18,7 +18,7 @@ class DevAuthControllerTest {
     @Test
     void loginReturnsUsableJwtForValidDemoCredentials() {
         JwtTokenProvider tokenProvider = new JwtTokenProvider(JWT_SECRET, "intern-base", 60_000L);
-        DevAuthController controller = new DevAuthController(tokenProvider, DEMO_PASSWORD, 60_000L);
+        DevAuthController controller = new DevAuthController(tokenProvider, DEMO_PASSWORD, "7", 60_000L);
         DevAuthController.DevLoginRequest request = request(7L, DEMO_PASSWORD);
 
         ResponseDO response = controller.login(request);
@@ -32,9 +32,29 @@ class DevAuthControllerTest {
     }
 
     @Test
+    void loginRejectsUserOutsideExplicitAllowlist() {
+        JwtTokenProvider tokenProvider = new JwtTokenProvider(JWT_SECRET, "intern-base", 60_000L);
+        DevAuthController controller = new DevAuthController(tokenProvider, DEMO_PASSWORD, "7", 60_000L);
+
+        ResponseDO response = controller.login(request(8L, DEMO_PASSWORD));
+
+        assertFalse(response.isSuccess());
+        assertEquals(401, response.getErrorCode());
+        assertEquals(null, response.getData());
+    }
+
+    @Test
+    void constructorRejectsEmptyUserAllowlist() {
+        JwtTokenProvider tokenProvider = new JwtTokenProvider(JWT_SECRET, "intern-base", 60_000L);
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new DevAuthController(tokenProvider, DEMO_PASSWORD, "", 60_000L));
+    }
+
+    @Test
     void loginRejectsInvalidPasswordWithoutIssuingToken() {
         JwtTokenProvider tokenProvider = new JwtTokenProvider(JWT_SECRET, "intern-base", 60_000L);
-        DevAuthController controller = new DevAuthController(tokenProvider, DEMO_PASSWORD, 60_000L);
+        DevAuthController controller = new DevAuthController(tokenProvider, DEMO_PASSWORD, "7", 60_000L);
 
         ResponseDO response = controller.login(request(7L, "wrong-password"));
 

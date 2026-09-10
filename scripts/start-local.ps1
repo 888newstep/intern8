@@ -61,11 +61,19 @@ Assert-RequiredEnvironment @(
     "RABBITMQ_USERNAME",
     "RABBITMQ_PASSWORD",
     "JWT_SECRET",
-    "DEMO_AUTH_PASSWORD"
+    "DEMO_AUTH_ENABLED",
+    "DEMO_AUTH_PASSWORD",
+    "DEMO_AUTH_ALLOWED_USER_IDS"
 )
 
 if ($env:JWT_SECRET.Length -lt 32) {
     throw "JWT_SECRET must contain at least 32 characters for HS256."
+}
+if ($env:DEMO_AUTH_ENABLED -ne "true") {
+    throw "DEMO_AUTH_ENABLED must be true for the local dev launcher."
+}
+if ($env:DEMO_AUTH_ALLOWED_USER_IDS -notmatch '^\s*[1-9][0-9]*(\s*,\s*[1-9][0-9]*)*\s*$') {
+    throw "DEMO_AUTH_ALLOWED_USER_IDS must be a comma-separated list of positive user IDs."
 }
 
 if (-not $SkipTopologyCheck) {

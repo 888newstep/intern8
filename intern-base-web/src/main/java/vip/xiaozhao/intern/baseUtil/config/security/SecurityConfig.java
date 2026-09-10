@@ -26,6 +26,7 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final ObjectMapper objectMapper;
     private final List<String> allowedOrigins;
+    private final boolean demoAuthEnabled;
     private static final RequestMatcher PUBLIC_AUTH_POST = request -> {
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
         return "POST".equals(request.getMethod())
@@ -42,13 +43,15 @@ public class SecurityConfig {
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
                           ObjectMapper objectMapper,
                           @Value("${security.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000}")
-                          String allowedOrigins) {
+                          String allowedOrigins,
+                          @Value("${demo.auth.enabled:false}") boolean demoAuthEnabled) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.objectMapper = objectMapper;
         this.allowedOrigins = Arrays.stream(allowedOrigins.split(","))
                 .map(String::trim)
                 .filter(origin -> !origin.isEmpty())
                 .toList();
+        this.demoAuthEnabled = demoAuthEnabled;
     }
 
     @Bean
@@ -73,12 +76,14 @@ public class SecurityConfig {
                     response.getWriter().write(objectMapper.writeValueAsString(result));
                 })
             )
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/user/login", "/api/user/register").permitAll()
-                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
-                .requestMatchers("/actuator/**").permitAll()
-                .anyRequest().authenticated()
-            )
+            .authorizeHttpRequests(auth -> {
+                auth.requestMatchers("/api/user/register").permitAll();
+                if (demoAuthEnabled) {
+                    auth.requestMatchers("/api/user/login").permitAll();
+                }
+                auth.requestMatchers("/actuator/health", "/actuator/health/**").permitAll();
+                auth.anyRequest().authenticated();
+            })
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

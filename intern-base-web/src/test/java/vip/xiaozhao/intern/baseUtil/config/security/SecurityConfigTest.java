@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.test.context.web.WebAppConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
@@ -21,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -29,6 +31,10 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppC
 
 @SpringJUnitConfig(SecurityConfigTest.TestConfiguration.class)
 @WebAppConfiguration
+@TestPropertySource(properties = {
+        "demo.auth.enabled=true",
+        "security.cors.allowed-origins=http://localhost:3000"
+})
 class SecurityConfigTest {
 
     private static final String ALLOWED_ORIGIN = "http://localhost:3000";
@@ -67,6 +73,24 @@ class SecurityConfigTest {
         mockMvc.perform(post("/protected")
                         .header("Authorization", "Bearer valid-token"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void actuatorHealthRemainsPublic() throws Exception {
+        mockMvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void actuatorMetricsRequiresAuthentication() throws Exception {
+        mockMvc.perform(get("/actuator/metrics"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void swaggerDocsRequireAuthentication() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -125,6 +149,21 @@ class SecurityConfigTest {
         @PostMapping("/protected")
         String protectedPost() {
             return "ok";
+        }
+
+        @org.springframework.web.bind.annotation.GetMapping("/actuator/health")
+        String health() {
+            return "UP";
+        }
+
+        @org.springframework.web.bind.annotation.GetMapping("/actuator/metrics")
+        String metrics() {
+            return "metrics";
+        }
+
+        @org.springframework.web.bind.annotation.GetMapping("/v3/api-docs")
+        String apiDocs() {
+            return "{}";
         }
     }
 }
