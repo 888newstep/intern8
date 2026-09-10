@@ -9,7 +9,7 @@ import java.security.spec.X509EncodedKeySpec;
 
 public final class RSASignature {
 
-    public static final String SIGN_ALGORITHMS = "SHA1WithRSA";
+    public static final String SIGN_ALGORITHM = "SHA256withRSA";
 
     private RSASignature() {
     }
@@ -17,7 +17,7 @@ public final class RSASignature {
     public static String signature(String content, String privateKey) throws Exception {
         KeyFactory keyFactory = KeyFactory.getInstance("RSA");
         PrivateKey key = keyFactory.generatePrivate(new PKCS8EncodedKeySpec(Base64.decode(privateKey)));
-        java.security.Signature signature = java.security.Signature.getInstance(SIGN_ALGORITHMS);
+        java.security.Signature signature = java.security.Signature.getInstance(SIGN_ALGORITHM);
         signature.initSign(key);
         signature.update(content.getBytes(StandardCharsets.UTF_8));
         return Base64.encode(signature.sign());
@@ -27,7 +27,7 @@ public final class RSASignature {
         try {
             KeyFactory keyFactory = KeyFactory.getInstance("RSA");
             PublicKey key = keyFactory.generatePublic(new X509EncodedKeySpec(Base64.decode(publicKey)));
-            java.security.Signature signature = java.security.Signature.getInstance(SIGN_ALGORITHMS);
+            java.security.Signature signature = java.security.Signature.getInstance(SIGN_ALGORITHM);
             signature.initVerify(key);
             signature.update(content.getBytes(StandardCharsets.UTF_8));
             return signature.verify(Base64.decode(sign));

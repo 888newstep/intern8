@@ -8,7 +8,7 @@ import com.qcloud.cos.http.HttpProtocol;
 import com.qcloud.cos.model.CannedAccessControlList;
 import com.qcloud.cos.model.CreateBucketRequest;
 import com.qcloud.cos.model.DeleteObjectRequest;
-import com.qcloud.cos.model.GetObjectRequest;
+import com.qcloud.cos.model.ObjectMetadata;
 import com.qcloud.cos.model.PutObjectRequest;
 import com.qcloud.cos.region.Region;
 import com.tencent.cloud.CosStsClient;
@@ -17,8 +17,8 @@ import org.apache.commons.lang3.StringUtils;
 import org.json.JSONObject;
 import vip.xiaozhao.intern.baseUtil.intf.constant.COSConstant;
 
-import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 import java.util.Date;
 import java.util.TreeMap;
@@ -45,26 +45,22 @@ public final class COSUtils {
         client.createBucket(request);
     }
 
-    /** 保留旧的 boolean API，调用方可以继续使用；失败详情通过异常日志记录。 */
-    public static boolean uploadFile(File file, String bucketName, String fileName) {
-        try {
-            uploadFileOrThrow(file, bucketName, fileName);
-            return true;
-        } catch (RuntimeException exception) {
-            log.error("COS upload failed, bucket={}, object={}", bucketName, fileName, exception);
-            return false;
+    /** 直接上传请求流，避免把用户输入映射为本地文件路径。 */
+    public static void uploadStreamOrThrow(InputStream inputStream, long contentLength,
+                                           String contentType, String bucketName,
+                                           String objectName) {
+        if (inputStream == null || contentLength <= 0) {
+            throw new IllegalArgumentException("COS upload stream is empty");
         }
-    }
-
-    /** 上传失败抛出异常，供熔断器正确记录下游失败。 */
-    public static void uploadFileOrThrow(File file, String bucketName, String fileName) {
-        if (file == null || !file.isFile()) {
-            throw new IllegalArgumentException("COS upload file does not exist");
+        requireObjectPath(bucketName, objectName);
+        ObjectMetadata metadata = new ObjectMetadata();
+        metadata.setContentLength(contentLength);
+        if (StringUtils.isNotBlank(contentType)) {
+            metadata.setContentType(contentType);
         }
-        requireObjectPath(bucketName, fileName);
         COSClient client = client();
         ensureBucket(client, bucketName);
-        client.putObject(new PutObjectRequest(bucketName, fileName, file));
+        client.putObject(new PutObjectRequest(bucketName, objectName, inputStream, metadata));
     }
 
     public static String accessFile(String bucketName, String fileName) {
@@ -85,22 +81,15 @@ public final class COSUtils {
         client().deleteObject(new DeleteObjectRequest(bucketName, fileName));
     }
 
-    public static File getObject(String bucket, String object, String fileName) {
-        requireObjectPath(bucket, object);
-        if (StringUtils.isBlank(fileName)) {
-            throw new IllegalArgumentException("Local target file is required");
-        }
-        File file = new File(fileName);
-        client().getObject(new GetObjectRequest(bucket, object), file);
-        return file;
-    }
-
     public static String geneSignedUrl(String bucketName, String objectName) {
         Date expiration = new Date(System.currentTimeMillis() + 5 * 60 * 1000L);
         return geneSignedUrl(bucketName, objectName, expiration);
     }
 
-    public static JSONObject genCOSPlubParams() throws IOException {
+    public static JSONObject genCOSPlubParams(Long userId) throws IOException {
+        if (userId == null || userId <= 0) {
+            throw new IllegalArgumentException("COS upload user is required");
+        }
         requireCredentials();
         TreeMap<String, Object> config = new TreeMap<>();
         config.put("secretId", COSConstant.accessKeyId);
@@ -108,7 +97,7 @@ public final class COSUtils {
         config.put("durationSeconds", 600);
         config.put("bucket", COSConstant.mainBucket);
         config.put("region", region());
-        config.put("allowPrefix", "uploads/*");
+        config.put("allowPrefix", "uploads/" + userId + "/*");
         config.put("allowActions", new String[]{
                 "name/cos:PutObject",
                 "name/cos:PostObject"

@@ -20,8 +20,8 @@ import vip.xiaozhao.intern.baseUtil.intf.dto.ResponseDO;
 import vip.xiaozhao.intern.baseUtil.intf.utils.cos.COSUtils;
 import vip.xiaozhao.intern.baseUtil.service.CircuitBreakerService;
 
-import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -53,7 +53,7 @@ public class OSSController extends BaseController {
             JSONObject credential = circuitBreakerService.executeWithCosBreaker(
                     () -> {
                         try {
-                            return COSUtils.genCOSPlubParams();
+                            return COSUtils.genCOSPlubParams(currentUserId);
                         } catch (IOException exception) {
                             throw new IllegalStateException("COS STS request failed", exception);
                         }
@@ -70,7 +70,7 @@ public class OSSController extends BaseController {
             result.put("expiredTime", credential.getLong("expiredTime"));
             result.put("bucket", COSConstant.mainBucket);
             result.put("region", COSConstant.region);
-            result.put("allowPrefix", "*");
+            result.put("allowPrefix", userUploadPrefix(currentUserId) + "*");
             return success(result);
         } catch (Exception e) {
             logger.warn("Failed to generate COS upload token", e);
@@ -81,31 +81,21 @@ public class OSSController extends BaseController {
     @Operation(summary = "Upload file", description = "Upload a file to COS through the server")
     @PostMapping("/upload")
     public ResponseDO uploadFile(@RequestParam("file") MultipartFile file,
-                                 @RequestParam(value = "dir", defaultValue = "uploads") String dir) {
+                                 @RequestParam(value = "dir", required = false) String ignoredDir) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
         if (file.isEmpty()) {
             return fail("file is empty");
         }
-        File tempFile = null;
-        try {
-            String normalizedDir = normalizeDirectory(dir);
-            String originalFilename = file.getOriginalFilename();
-            String ext = "";
-            if (originalFilename != null && originalFilename.contains(".")) {
-                String extension = originalFilename.substring(originalFilename.lastIndexOf('.') + 1);
-                if (SAFE_EXTENSION.matcher(extension).matches()) {
-                    ext = "." + extension;
-                }
-            }
-            String fileName = normalizedDir + "/"
-                    + UUID.randomUUID().toString().replace("-", "") + ext;
-
-            tempFile = File.createTempFile("cos_upload_", ext);
-            file.transferTo(tempFile);
-            File uploadedFile = tempFile;
+        try (InputStream inputStream = file.getInputStream()) {
+            String fileName = buildObjectName(currentUserId, file.getOriginalFilename());
 
             boolean uploaded = circuitBreakerService.executeWithCosBreaker(
                     () -> {
-                        COSUtils.uploadFileOrThrow(uploadedFile, COSConstant.mainBucket, fileName);
+                        COSUtils.uploadStreamOrThrow(inputStream, file.getSize(), file.getContentType(),
+                                COSConstant.mainBucket, fileName);
                         return true;
                     },
                     () -> false);
@@ -118,19 +108,22 @@ public class OSSController extends BaseController {
             }
             return fail("COS temporarily unavailable or upload failed");
         } catch (IOException e) {
-            logger.warn("Failed to prepare COS upload file", e);
+            logger.warn("Failed to read COS upload stream", e);
             return fail("upload error");
-        } finally {
-            deleteTempFile(tempFile);
         }
     }
 
     @Operation(summary = "Get access URL", description = "Generate a temporary signed URL")
     @GetMapping("/access/{fileName}")
     public ResponseDO getAccessUrl(@Parameter(description = "File path", required = true) @PathVariable String fileName) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
         try {
+            String objectName = requireOwnedObjectName(currentUserId, fileName);
             String url = circuitBreakerService.executeWithCosBreaker(
-                    () -> COSUtils.geneSignedUrl(COSConstant.mainBucket, fileName),
+                    () -> COSUtils.geneSignedUrl(COSConstant.mainBucket, objectName),
                     () -> null);
             if (url == null) {
                 return fail("COS temporarily unavailable");
@@ -147,13 +140,18 @@ public class OSSController extends BaseController {
     @Operation(summary = "Delete file", description = "Delete a file from COS")
     @PostMapping("/delete")
     public ResponseDO deleteFile(@Parameter(description = "Delete request", required = true) @RequestBody DeleteFileRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
         if (request.getFileName() == null || request.getFileName().isEmpty()) {
             return fail("file name is required");
         }
         try {
+            String objectName = requireOwnedObjectName(currentUserId, request.getFileName());
             boolean deleted = circuitBreakerService.executeWithCosBreaker(
                     () -> {
-                        COSUtils.deleteObjectOrThrow(COSConstant.mainBucket, request.getFileName());
+                        COSUtils.deleteObjectOrThrow(COSConstant.mainBucket, objectName);
                         return true;
                     },
                     () -> false);
@@ -167,31 +165,40 @@ public class OSSController extends BaseController {
         }
     }
 
-    private static String normalizeDirectory(String dir) {
-        String normalized = dir == null ? "" : dir.trim().replace('\\', '/');
-        while (normalized.startsWith("/")) {
-            normalized = normalized.substring(1);
-        }
-        while (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        if (normalized.isBlank()) {
-            throw new IllegalArgumentException("upload directory is required");
-        }
-        String[] segments = normalized.split("/");
-        for (String segment : segments) {
-            if (segment.isBlank() || ".".equals(segment) || "..".equals(segment)
-                    || !segment.matches("[A-Za-z0-9_-]{1,64}")) {
-                throw new IllegalArgumentException("invalid upload directory");
-            }
-        }
-        return normalized;
+    static String userUploadPrefix(Long userId) {
+        return "uploads/" + userId + "/";
     }
 
-    private static void deleteTempFile(File tempFile) {
-        if (tempFile != null && tempFile.exists() && !tempFile.delete()) {
-            logger.warn("Unable to delete temporary COS upload file: {}", tempFile.getAbsolutePath());
+    static String buildObjectName(Long userId, String originalFilename) {
+        if (userId == null || userId <= 0) {
+            throw new IllegalArgumentException("valid user id is required");
         }
+        String extensionSuffix = "";
+        if (originalFilename != null && originalFilename.contains(".")) {
+            String extension = originalFilename.substring(originalFilename.lastIndexOf('.') + 1);
+            if (SAFE_EXTENSION.matcher(extension).matches()) {
+                extensionSuffix = "." + extension.toLowerCase(java.util.Locale.ROOT);
+            }
+        }
+        return userUploadPrefix(userId)
+                + UUID.randomUUID().toString().replace("-", "")
+                + extensionSuffix;
+    }
+
+    static String requireOwnedObjectName(Long userId, String fileName) {
+        if (userId == null || userId <= 0) {
+            throw new IllegalArgumentException("valid user id is required");
+        }
+        String prefix = userUploadPrefix(userId);
+        String objectName = fileName == null ? "" : fileName.trim().replace('\\', '/');
+        if (!objectName.startsWith(prefix)) {
+            objectName = prefix + objectName;
+        }
+        String leaf = objectName.substring(prefix.length());
+        if (!leaf.matches("[A-Fa-f0-9]{32}(\\.[A-Za-z0-9]{1,10})?")) {
+            throw new IllegalArgumentException("invalid or unauthorized COS object name");
+        }
+        return prefix + leaf;
     }
 
     public static class UploadTokenRequest {

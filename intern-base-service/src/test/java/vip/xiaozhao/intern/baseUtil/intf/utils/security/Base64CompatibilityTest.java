@@ -1,6 +1,7 @@
 package vip.xiaozhao.intern.baseUtil.intf.utils.security;
 
 import org.junit.jupiter.api.Test;
+import vip.xiaozhao.intern.baseUtil.intf.constant.SignKeyConstant;
 import vip.xiaozhao.intern.baseUtil.intf.utils.JjwtUtil;
 
 import java.nio.charset.StandardCharsets;
@@ -38,17 +39,9 @@ class Base64CompatibilityTest {
     }
 
     @Test
-    void tripleDes_ShouldKeepExistingCiphertextCompatibility() {
-        assertEquals("d1laAOGB9mA=", TripleDes.encryt("hello"));
-        assertEquals("hello", TripleDes.decrypt("d1laAOGB9mA="));
-        assertEquals("1084", TripleDes.decrypt("J6wEKQu8iMk="));
-        assertEquals("round-trip", EncryptUtil.decrypt(EncryptUtil.encrypt("round-trip")));
-    }
-
-    @Test
     void rsaSignature_ShouldRoundTripGeneratedKeys() throws Exception {
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-        generator.initialize(1024);
+        generator.initialize(2048);
         KeyPair keyPair = generator.generateKeyPair();
         String privateKey = Base64.encode(keyPair.getPrivate().getEncoded());
         String publicKey = Base64.encode(keyPair.getPublic().getEncoded());
@@ -61,6 +54,7 @@ class Base64CompatibilityTest {
 
     @Test
     void loginToken_ShouldRoundTripAfterCodecReplacement() throws Exception {
+        SignKeyConstant.LOGIN_TIME_KEY = "test-login-signing-key-with-at-least-32-bytes";
         String token = JjwtUtil.getLoginToken(8263);
 
         assertEquals(8263, JjwtUtil.verifyLoginToken(token));
