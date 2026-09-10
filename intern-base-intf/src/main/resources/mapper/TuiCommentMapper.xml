@@ -38,6 +38,11 @@
         UPDATE tui_comment SET like_count = like_count + 1, update_time = NOW() WHERE id = #{id} AND status = 0
     </update>
 
+    <update id="decrementLikeCount">
+        UPDATE tui_comment SET like_count = like_count - 1, update_time = NOW()
+        WHERE id = #{id} AND status = 0 AND like_count > 0
+    </update>
+
     <update id="deleteById">
         UPDATE tui_comment SET status = 1, update_time = NOW() WHERE id = #{id}
     </update>

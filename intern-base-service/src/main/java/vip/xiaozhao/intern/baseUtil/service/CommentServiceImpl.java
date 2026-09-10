@@ -27,6 +27,9 @@ public class CommentServiceImpl implements CommentService {
 
     private static final Logger logger = LoggerFactory.getLogger(CommentServiceImpl.class);
     private static final String DYNAMIC_DETAIL_CACHE_PREFIX = "dynamic:detail:";
+    private static final int COMMENT_LIKE_TARGET_TYPE = 2;
+    private static final int LIKE_STATUS_ACTIVE = 0;
+    private static final int LIKE_STATUS_INACTIVE = 1;
 
     private final TuiCommentMapper commentMapper;
     private final TuiDynamicMapper dynamicMapper;
@@ -114,25 +117,34 @@ public class CommentServiceImpl implements CommentService {
                 throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "Comment not found");
             }
 
-            TuiLike existingLike = likeMapper.selectByUserAndTarget(userId, commentId, 2);
-            if (existingLike != null) {
+            TuiLike existingLike = likeMapper.selectByUserAndTarget(
+                    userId, commentId, COMMENT_LIKE_TARGET_TYPE);
+            if (existingLike == null) {
+                TuiLike like = new TuiLike();
+                like.setUserId(userId);
+                like.setTargetId(commentId);
+                like.setTargetType(COMMENT_LIKE_TARGET_TYPE);
+                like.setStatus(LIKE_STATUS_ACTIVE);
+                like.setCreateTime(new Date());
+                like.setUpdateTime(new Date());
+                try {
+                    requireSingleRow(likeMapper.insert(like), "create comment like relation");
+                } catch (org.springframework.dao.DuplicateKeyException e) {
+                    throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
+                }
+            } else if (Integer.valueOf(LIKE_STATUS_ACTIVE).equals(existingLike.getStatus())) {
                 throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
+            } else if (Integer.valueOf(LIKE_STATUS_INACTIVE).equals(existingLike.getStatus())) {
+                requireSingleRow(likeMapper.reactivateByUserAndTarget(
+                        userId, commentId, COMMENT_LIKE_TARGET_TYPE),
+                        "reactivate comment like relation");
+            } else {
+                throw new BusinessException(ErrorCode.INTERNAL_ERROR.getCode(),
+                        "Invalid comment like relation status");
             }
 
-            TuiLike like = new TuiLike();
-            like.setUserId(userId);
-            like.setTargetId(commentId);
-            like.setTargetType(2);
-            like.setStatus(0);
-            like.setCreateTime(new Date());
-            like.setUpdateTime(new Date());
-            try {
-                likeMapper.insert(like);
-            } catch (org.springframework.dao.DuplicateKeyException e) {
-                throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
-            }
-
-            commentMapper.updateLikeCount(commentId);
+            requireSingleRow(commentMapper.updateLikeCount(commentId),
+                    "increment comment like count");
 
             final Long targetUserId = comment.getUserId();
             if (!userId.equals(targetUserId)) {
@@ -142,6 +154,37 @@ public class CommentServiceImpl implements CommentService {
 
         if (!locked) {
             throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Operation too frequent, please retry later");
+        }
+    }
+
+    @Override
+    @Transactional(timeout = 5)
+    public void unlikeComment(Long userId, Long commentId) {
+        String lockKey = DistributedLockService.LOCK_DYNAMIC_COMMENT
+                + userId + ":comment:" + commentId;
+        boolean locked = lockService.executeWithLockVoid(lockKey, () -> {
+            TuiComment comment = commentMapper.selectById(commentId);
+            if (comment == null) {
+                throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "Comment not found");
+            }
+
+            TuiLike existingLike = likeMapper.selectByUserAndTarget(
+                    userId, commentId, COMMENT_LIKE_TARGET_TYPE);
+            if (existingLike == null
+                    || !Integer.valueOf(LIKE_STATUS_ACTIVE).equals(existingLike.getStatus())) {
+                throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "Comment like not found");
+            }
+
+            requireSingleRow(likeMapper.deleteByUserAndTarget(
+                    userId, commentId, COMMENT_LIKE_TARGET_TYPE),
+                    "deactivate comment like relation");
+            requireSingleRow(commentMapper.decrementLikeCount(commentId),
+                    "decrement comment like count");
+        });
+
+        if (!locked) {
+            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(),
+                    "Operation too frequent, please retry later");
         }
     }
 
@@ -183,5 +226,12 @@ public class CommentServiceImpl implements CommentService {
 
     private boolean enqueueOutbox(BaseMqEvent event, String exchangeName, String routingKey) {
         return mqOutboxService != null && mqOutboxService.enqueue(event, exchangeName, routingKey);
+    }
+
+    private void requireSingleRow(int affectedRows, String operation) {
+        if (affectedRows != 1) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR.getCode(),
+                    "Failed to " + operation);
+        }
     }
 }

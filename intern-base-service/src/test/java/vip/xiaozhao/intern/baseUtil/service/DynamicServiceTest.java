@@ -123,6 +123,8 @@ class DynamicServiceTest {
     void likeDynamic_Success() {
         setupLockMock();
         when(dynamicMapper.selectById(1L)).thenReturn(testDynamic);
+        when(likeMapper.insert(any())).thenReturn(1);
+        when(dynamicMapper.updateLikeCount(1L)).thenReturn(1);
 
         assertDoesNotThrow(() -> dynamicService.likeDynamic(300L, 1L));
 
@@ -137,6 +139,8 @@ class DynamicServiceTest {
     void likeDynamic_SelfLike_NoNotification() {
         setupLockMock();
         when(dynamicMapper.selectById(1L)).thenReturn(testDynamic);
+        when(likeMapper.insert(any())).thenReturn(1);
+        when(dynamicMapper.updateLikeCount(1L)).thenReturn(1);
 
         assertDoesNotThrow(() -> dynamicService.likeDynamic(100L, 1L));
 

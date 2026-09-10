@@ -12,6 +12,8 @@ public interface CommentService {
 
     void likeComment(Long userId, Long commentId);
 
+    void unlikeComment(Long userId, Long commentId);
+
     void deleteComment(Long userId, Long commentId);
 
     int countByDynamicId(Long dynamicId);

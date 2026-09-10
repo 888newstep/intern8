@@ -18,6 +18,7 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # Environment
 .env
@@ -31,6 +32,7 @@ out/
 # Test
 *.pyc
 __pycache__/
+SECURITY_AUDIT_RESULTS.json
 
 # Temporary files
 *.tmp

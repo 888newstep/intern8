@@ -70,7 +70,7 @@ public class CommentController extends BaseController {
                 });
     }
 
-    @Operation(summary = "评论点赞", description = "对评论进行点赞")
+    @Operation(summary = "评论点赞", description = "对评论进行点赞（每分钟点赞操作限30次）")
     @PostMapping("/like")
     public ResponseDO likeComment(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -81,8 +81,30 @@ public class CommentController extends BaseController {
         }
         return apiIdempotencyService.execute(currentUserId, "POST:/api/comment/like",
                 idempotencyKey, request, () -> {
+                    if (!rateLimiterService.tryAcquireLike(currentUserId)) {
+                        return fail(429, "操作太频繁，每分钟最多执行30次点赞操作");
+                    }
                     commentService.likeComment(currentUserId, request.getCommentId());
                     return success("点赞成功");
+                });
+    }
+
+    @Operation(summary = "取消评论点赞", description = "取消对评论的点赞（每分钟点赞操作限30次）")
+    @PostMapping("/unlike")
+    public ResponseDO unlikeComment(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody LikeCommentRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/comment/unlike",
+                idempotencyKey, request, () -> {
+                    if (!rateLimiterService.tryAcquireLike(currentUserId)) {
+                        return fail(429, "操作太频繁，每分钟最多执行30次点赞操作");
+                    }
+                    commentService.unlikeComment(currentUserId, request.getCommentId());
+                    return success("取消点赞成功");
                 });
     }
 

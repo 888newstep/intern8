@@ -16,6 +16,8 @@ public interface DynamicService {
 
     void likeDynamic(Long userId, Long dynamicId);
 
+    void unlikeDynamic(Long userId, Long dynamicId);
+
     void commentDynamic(Long userId, Long dynamicId, String content);
 
     void shareDynamic(Long userId, Long dynamicId);

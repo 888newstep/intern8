@@ -19,12 +19,17 @@
 
     <select id="selectByUserAndTarget" resultMap="BaseResultMap">
         SELECT * FROM tui_like 
-        WHERE user_id = #{userId} AND target_id = #{targetId} AND target_type = #{targetType} AND status = 0
+        WHERE user_id = #{userId} AND target_id = #{targetId} AND target_type = #{targetType}
     </select>
+
+    <update id="reactivateByUserAndTarget">
+        UPDATE tui_like SET status = 0, update_time = NOW()
+        WHERE user_id = #{userId} AND target_id = #{targetId} AND target_type = #{targetType} AND status = 1
+    </update>
 
     <update id="deleteByUserAndTarget">
         UPDATE tui_like SET status = 1, update_time = NOW()
-        WHERE user_id = #{userId} AND target_id = #{targetId} AND target_type = #{targetType}
+        WHERE user_id = #{userId} AND target_id = #{targetId} AND target_type = #{targetType} AND status = 0
     </update>
 
 </mapper>

@@ -70,6 +70,7 @@ class LikeConcurrencyTest {
         TuiLike existingLike = new TuiLike();
         existingLike.setUserId(userId);
         existingLike.setTargetId(dynamicId);
+        existingLike.setStatus(0);
 
         when(dynamicMapper.selectById(dynamicId)).thenReturn(dynamic);
         when(likeMapper.selectByUserAndTarget(userId, dynamicId, 1)).thenReturn(existingLike);
@@ -100,6 +101,7 @@ class LikeConcurrencyTest {
         when(dynamicMapper.selectById(dynamicId)).thenReturn(dynamic);
         when(likeMapper.selectByUserAndTarget(userId, dynamicId, 1)).thenReturn(null);
         when(likeMapper.insert(any())).thenReturn(1);
+        when(dynamicMapper.updateLikeCount(dynamicId)).thenReturn(1);
         when(lockService.executeWithLockVoid(anyString(), any())).thenAnswer(invocation -> {
             Runnable task = invocation.getArgument(1);
             task.run();
@@ -124,6 +126,7 @@ class LikeConcurrencyTest {
         TuiLike existingLike = new TuiLike();
         existingLike.setUserId(userId);
         existingLike.setTargetId(commentId);
+        existingLike.setStatus(0);
 
         when(commentMapper.selectById(commentId)).thenReturn(comment);
         when(likeMapper.selectByUserAndTarget(userId, commentId, 2)).thenReturn(existingLike);

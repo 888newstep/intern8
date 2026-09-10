@@ -38,7 +38,9 @@ public interface TuiDynamicMapper {
 
     List<TuiDynamic> selectByUserId(@Param("userId") Long userId, @Param("cursor") Long cursor, @Param("limit") Integer limit);
 
-    void updateLikeCount(@Param("id") Long id);
+    int updateLikeCount(@Param("id") Long id);
+
+    int decrementLikeCount(@Param("id") Long id);
 
     void updateCommentCount(@Param("id") Long id);
 

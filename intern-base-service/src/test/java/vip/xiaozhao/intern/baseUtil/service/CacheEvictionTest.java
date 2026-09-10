@@ -79,6 +79,8 @@ class CacheEvictionTest {
 
         when(dynamicMapper.selectById(dynamicId)).thenReturn(dynamic);
         when(likeMapper.selectByUserAndTarget(userId, dynamicId, 1)).thenReturn(null);
+        when(likeMapper.insert(any())).thenReturn(1);
+        when(dynamicMapper.updateLikeCount(dynamicId)).thenReturn(1);
         when(lockService.executeWithLockVoid(anyString(), any())).thenAnswer(invocation -> {
             Runnable task = invocation.getArgument(1);
             task.run();

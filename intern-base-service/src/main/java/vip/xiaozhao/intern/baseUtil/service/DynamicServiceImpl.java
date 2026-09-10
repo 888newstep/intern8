@@ -34,6 +34,9 @@ import java.util.stream.Collectors;
 public class DynamicServiceImpl implements DynamicService {
 
     private static final String DYNAMIC_DETAIL_CACHE_PREFIX = "dynamic:detail:";
+    private static final int DYNAMIC_LIKE_TARGET_TYPE = 1;
+    private static final int LIKE_STATUS_ACTIVE = 0;
+    private static final int LIKE_STATUS_INACTIVE = 1;
     private static final int FEED_CANDIDATE_MULTIPLIER = 3;
     private static final int MAX_FEED_CANDIDATES = 300;
 
@@ -204,25 +207,34 @@ public class DynamicServiceImpl implements DynamicService {
                 throw new BusinessException(ErrorCode.DYNAMIC_NOT_FOUND.getCode(), ErrorCode.DYNAMIC_NOT_FOUND.getMessage());
             }
 
-            TuiLike existingLike = likeMapper.selectByUserAndTarget(userId, dynamicId, 1);
-            if (existingLike != null) {
+            TuiLike existingLike = likeMapper.selectByUserAndTarget(
+                    userId, dynamicId, DYNAMIC_LIKE_TARGET_TYPE);
+            if (existingLike == null) {
+                TuiLike like = new TuiLike();
+                like.setUserId(userId);
+                like.setTargetId(dynamicId);
+                like.setTargetType(DYNAMIC_LIKE_TARGET_TYPE);
+                like.setStatus(LIKE_STATUS_ACTIVE);
+                like.setCreateTime(new Date());
+                like.setUpdateTime(new Date());
+                try {
+                    requireSingleRow(likeMapper.insert(like), "create dynamic like relation");
+                } catch (org.springframework.dao.DuplicateKeyException e) {
+                    throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
+                }
+            } else if (Integer.valueOf(LIKE_STATUS_ACTIVE).equals(existingLike.getStatus())) {
                 throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
+            } else if (Integer.valueOf(LIKE_STATUS_INACTIVE).equals(existingLike.getStatus())) {
+                requireSingleRow(likeMapper.reactivateByUserAndTarget(
+                        userId, dynamicId, DYNAMIC_LIKE_TARGET_TYPE),
+                        "reactivate dynamic like relation");
+            } else {
+                throw new BusinessException(ErrorCode.INTERNAL_ERROR.getCode(),
+                        "Invalid dynamic like relation status");
             }
 
-            TuiLike like = new TuiLike();
-            like.setUserId(userId);
-            like.setTargetId(dynamicId);
-            like.setTargetType(1);
-            like.setStatus(0);
-            like.setCreateTime(new Date());
-            like.setUpdateTime(new Date());
-            try {
-                likeMapper.insert(like);
-            } catch (org.springframework.dao.DuplicateKeyException e) {
-                throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Already liked");
-            }
-
-            dynamicMapper.updateLikeCount(dynamicId);
+            requireSingleRow(dynamicMapper.updateLikeCount(dynamicId),
+                    "increment dynamic like count");
             evictDynamicDetailAfterCommit(dynamicId);
 
             final Long targetUserId = dynamic.getUserId();
@@ -233,6 +245,38 @@ public class DynamicServiceImpl implements DynamicService {
 
         if (!locked) {
             throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(), "Operation too frequent, please retry later");
+        }
+    }
+
+    @Override
+    @Transactional(timeout = 5)
+    public void unlikeDynamic(Long userId, Long dynamicId) {
+        String lockKey = DistributedLockService.LOCK_DYNAMIC_LIKE + userId + ":" + dynamicId;
+        boolean locked = lockService.executeWithLockVoid(lockKey, () -> {
+            TuiDynamic dynamic = dynamicMapper.selectById(dynamicId);
+            if (dynamic == null) {
+                throw new BusinessException(ErrorCode.DYNAMIC_NOT_FOUND.getCode(),
+                        ErrorCode.DYNAMIC_NOT_FOUND.getMessage());
+            }
+
+            TuiLike existingLike = likeMapper.selectByUserAndTarget(
+                    userId, dynamicId, DYNAMIC_LIKE_TARGET_TYPE);
+            if (existingLike == null
+                    || !Integer.valueOf(LIKE_STATUS_ACTIVE).equals(existingLike.getStatus())) {
+                throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "Dynamic like not found");
+            }
+
+            requireSingleRow(likeMapper.deleteByUserAndTarget(
+                    userId, dynamicId, DYNAMIC_LIKE_TARGET_TYPE),
+                    "deactivate dynamic like relation");
+            requireSingleRow(dynamicMapper.decrementLikeCount(dynamicId),
+                    "decrement dynamic like count");
+            evictDynamicDetailAfterCommit(dynamicId);
+        });
+
+        if (!locked) {
+            throw new BusinessException(ErrorCode.TOO_FREQUENT.getCode(),
+                    "Operation too frequent, please retry later");
         }
     }
 
@@ -379,5 +423,12 @@ public class DynamicServiceImpl implements DynamicService {
 
     private boolean enqueueOutbox(BaseMqEvent event, String exchangeName, String routingKey) {
         return mqOutboxService != null && mqOutboxService.enqueue(event, exchangeName, routingKey);
+    }
+
+    private void requireSingleRow(int affectedRows, String operation) {
+        if (affectedRows != 1) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR.getCode(),
+                    "Failed to " + operation);
+        }
     }
 }

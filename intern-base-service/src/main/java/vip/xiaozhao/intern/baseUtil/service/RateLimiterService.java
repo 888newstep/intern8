@@ -28,7 +28,7 @@ public class RateLimiterService {
     public static final long PUBLISH_INTERVAL = 1L;
     public static final RateIntervalUnit PUBLISH_INTERVAL_UNIT = RateIntervalUnit.MINUTES;
 
-    /** 用户点赞：每分钟最多30次 */
+    /** 动态和评论的所有点赞/取消点赞操作：每分钟最多30次 */
     public static final String LIMITER_DYNAMIC_LIKE = RATE_LIMITER_PREFIX + "dynamic:like:";
     public static final long LIKE_RATE = 30L;
     public static final long LIKE_INTERVAL = 1L;
@@ -76,7 +76,7 @@ public class RateLimiterService {
     }
 
     /**
-     * 检查用户是否可点赞（每分钟最多30次）
+     * 检查用户是否可执行动态或评论点赞操作（每分钟最多30次）
      */
     public boolean tryAcquireLike(Long userId) {
         return tryAcquire(LIMITER_DYNAMIC_LIKE + userId,

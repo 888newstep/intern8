@@ -17,6 +17,8 @@ public interface TuiCommentMapper {
 
     int updateLikeCount(@Param("id") Long id);
 
+    int decrementLikeCount(@Param("id") Long id);
+
     int deleteById(@Param("id") Long id);
 
     int countByDynamicId(@Param("dynamicId") Long dynamicId);

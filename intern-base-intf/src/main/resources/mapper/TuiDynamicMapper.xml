@@ -102,6 +102,11 @@
         UPDATE tui_dynamic SET like_count = like_count + 1, update_time = NOW() WHERE id = #{id} AND status = 0
     </update>
 
+    <update id="decrementLikeCount">
+        UPDATE tui_dynamic SET like_count = like_count - 1, update_time = NOW()
+        WHERE id = #{id} AND status = 0 AND like_count > 0
+    </update>
+
     <update id="updateCommentCount">
         UPDATE tui_dynamic SET comment_count = comment_count + 1, update_time = NOW() WHERE id = #{id} AND status = 0
     </update>

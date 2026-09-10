@@ -124,6 +124,25 @@ public class DynamicController extends BaseController {
                 });
     }
 
+    @Operation(summary = "取消动态点赞", description = "取消对动态的点赞（每分钟点赞操作限30次）")
+    @PostMapping("/unlike")
+    public ResponseDO unlikeDynamic(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Parameter(description = "取消点赞请求", required = true) @Valid @RequestBody LikeRequest request) {
+        Long currentUserId = getCurrentUserId();
+        if (currentUserId == null) {
+            return unauthorized();
+        }
+        return apiIdempotencyService.execute(currentUserId, "POST:/api/dynamic/unlike",
+                idempotencyKey, request, () -> {
+                    if (!rateLimiterService.tryAcquireLike(currentUserId)) {
+                        return fail(429, "操作太频繁，每分钟最多执行30次点赞操作");
+                    }
+                    dynamicService.unlikeDynamic(currentUserId, request.getDynamicId());
+                    return success("取消点赞成功");
+                });
+    }
+
     @Operation(summary = "评论动态", description = "对动态进行评论（每分钟限20次）")
     @PostMapping("/comment")
     public ResponseDO commentDynamic(
