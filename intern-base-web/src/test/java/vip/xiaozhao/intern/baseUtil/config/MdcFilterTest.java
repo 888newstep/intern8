@@ -3,6 +3,7 @@ package vip.xiaozhao.intern.baseUtil.config;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -11,9 +12,16 @@ import org.slf4j.MDC;
 import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MdcFilterTest {
+
+    @BeforeEach
+    void resetMdc() {
+        MDC.clear();
+    }
 
     @AfterEach
     void clearMdc() {
@@ -41,12 +49,15 @@ class MdcFilterTest {
     void disabledRequestContextDoesNotTouchMdcOrResponseHeaders() throws ServletException, IOException {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/test");
         MockHttpServletResponse response = new MockHttpServletResponse();
+        MDC.put("existing", "preserved");
         FilterChain chain = (servletRequest, servletResponse) -> {
-            assertTrue(MDC.getCopyOfContextMap() == null || MDC.getCopyOfContextMap().isEmpty());
+            assertEquals("preserved", MDC.get("existing"));
+            assertNull(MDC.get("requestId"));
         };
 
         new MdcFilter(false).doFilter(request, response, chain);
 
-        assertTrue(response.getHeader("X-Request-Id") == null);
+        assertEquals("preserved", MDC.get("existing"));
+        assertNull(response.getHeader("X-Request-Id"));
     }
 }
