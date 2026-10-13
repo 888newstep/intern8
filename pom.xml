@@ -41,7 +41,7 @@
         <cos-sts.version>3.0.8</cos-sts.version>
         <tencentcloud-sdk.version>3.2.20</tencentcloud-sdk.version>
         <bouncycastle.version>1.85</bouncycastle.version>
-        <jsoup.version>1.23.1</jsoup.version>
+        <jsoup.version>1.23.2</jsoup.version>
         <resilience4j.version>2.4.0</resilience4j.version>
         <json.version>20260814</json.version>
         <testcontainers.version>1.21.4</testcontainers.version>
